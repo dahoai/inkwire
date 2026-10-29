@@ -16,14 +16,24 @@ export class InkwireClientError extends Error {
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+export interface PublishOptions {
+  retries?: number;
+  /**
+   * The fetch to send with (default: global fetch). A server that publishes to user-supplied
+   * site URLs should pass an SSRF-guarded fetch that refuses internal hosts on every redirect hop.
+   */
+  fetch?: (url: string, init: RequestInit) => Promise<Response>;
+}
+
 export async function publish(
-  baseUrl: string, apiKey: string, payload: PostPayload, opts: { retries?: number } = {},
+  baseUrl: string, apiKey: string, payload: PostPayload, opts: PublishOptions = {},
 ): Promise<PublishResult> {
   const retries = Math.max(1, opts.retries ?? 3);
+  const send = opts.fetch ?? fetch;
   const url = `${baseUrl.replace(/\/$/, "")}/api/posts`;
   let lastErr: unknown;
   for (let attempt = 1; attempt <= retries; attempt++) {
-    const res = await fetch(url, {
+    const res = await send(url, {
       method: "POST",
       headers: {
         "content-type": "application/json",

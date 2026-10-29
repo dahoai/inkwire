@@ -13,6 +13,6 @@ const result = await publish("https://blog.example.com", "your-api-key", {
 });
 ```
 
-`publish(baseUrl, apiKey, payload, opts?)` upserts by `external_id`, retries on `429`/5xx with backoff, and throws `InkwireClientError` (`code`, `message`, `httpStatus`) on failure.
+`publish(baseUrl, apiKey, payload, opts?)` upserts by `external_id`, retries on `429`/5xx with backoff, and throws `InkwireClientError` (`code`, `message`, `httpStatus`) on failure. Pass `opts.fetch` to send through your own fetch, for example an SSRF-guarded one when the site URL comes from your users.
 
 See the [protocol spec](https://github.com/etugrand/inkwire/blob/master/inkwire/SPEC.md) for the full payload shape.

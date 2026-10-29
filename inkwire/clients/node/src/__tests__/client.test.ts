@@ -46,3 +46,12 @@ it("retries: 0 still makes one attempt and throws typed error", async () => {
     .rejects.toMatchObject({ code: "server_error", httpStatus: 500 });
   expect(fetchMock).toHaveBeenCalledTimes(1);
 });
+
+it("sends through a custom fetch when given one", async () => {
+  const custom = vi.fn(async () => ok({ id: "1", external_id: "e", url: "u", slug: "s", status: "draft", created: true }));
+  vi.stubGlobal("fetch", vi.fn());
+  await publish("https://site.test/", "k", { external_id: "e", title: "T", markdown: "x" }, { fetch: custom });
+  expect(custom).toHaveBeenCalledTimes(1);
+  expect((custom.mock.calls[0] as any)[0]).toBe("https://site.test/api/posts");
+  expect(fetch).not.toHaveBeenCalled();
+});

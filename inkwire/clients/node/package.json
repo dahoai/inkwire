@@ -1,5 +1,5 @@
 {
-  "name": "inkwire-client", "version": "0.2.0", "type": "module",
+  "name": "inkwire-client", "version": "0.3.0", "type": "module",
   "description": "Client SDK for publishing posts to an Inkwire receiver (idempotent, retrying, typed errors).",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/etugrand/inkwire.git", "directory": "inkwire/clients/node" },
