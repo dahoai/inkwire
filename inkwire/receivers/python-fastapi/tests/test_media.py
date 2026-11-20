@@ -147,3 +147,59 @@ def test_the_guarded_fetcher_rejects_internal_hosts():
     ):
         with pytest.raises(InkwireError):
             asyncio.run(assert_public_url(url))
+
+
+def _resolver(monkeypatch, addresses):
+    import socket
+
+    async def getaddrinfo(self, host, port, **kwargs):  # noqa: ARG001
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port)) for address in addresses]
+
+    monkeypatch.setattr("asyncio.base_events.BaseEventLoop.getaddrinfo", getaddrinfo)
+
+
+def test_the_guarded_fetcher_pins_the_connection_to_the_checked_address(monkeypatch):
+    import httpx
+
+    from inkwire_receiver import guarded_fetcher
+
+    _resolver(monkeypatch, ["93.184.216.34"])
+    seen = {}
+
+    def handler(request):
+        seen["host"] = request.url.host
+        seen["header"] = request.headers["host"]
+        seen["sni"] = request.extensions.get("sni_hostname")
+        return httpx.Response(200, content=PNG, headers={"content-type": "image/png"})
+
+    fetch = guarded_fetcher(client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    body, filename, content_type = asyncio.run(fetch("https://img.example.test/a/b.png"))
+    assert body == PNG and filename == "b.png" and content_type == "image/png"
+    # The socket goes to the address that was checked, never to a second DNS answer.
+    assert seen == {"host": "93.184.216.34", "header": "img.example.test", "sni": "img.example.test"}
+
+
+@pytest.mark.parametrize(
+    "url, addresses",
+    [
+        ("https://mixed.example.test/a.png", ["93.184.216.34", "10.0.0.5"]),  # one private answer is enough to refuse
+        ("https://img.example.test:8443/a.png", ["93.184.216.34"]),
+        ("https://user:pw@img.example.test/a.png", ["93.184.216.34"]),
+    ],
+)
+def test_the_guarded_fetcher_refuses_mixed_answers_odd_ports_and_credentials(monkeypatch, url, addresses):
+    _resolver(monkeypatch, addresses)
+    with pytest.raises(InkwireError):
+        asyncio.run(assert_public_url(url))
+
+
+def test_the_guarded_fetcher_does_not_follow_redirects(monkeypatch):
+    import httpx
+
+    from inkwire_receiver import guarded_fetcher
+
+    _resolver(monkeypatch, ["93.184.216.34"])
+    transport = httpx.MockTransport(lambda request: httpx.Response(302, headers={"location": "http://127.0.0.1/x.png"}))
+    fetch = guarded_fetcher(client=httpx.AsyncClient(transport=transport))
+    with pytest.raises(InkwireError):
+        asyncio.run(fetch("https://img.example.test/a.png"))

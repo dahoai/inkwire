@@ -339,11 +339,14 @@ async def handle_list(
 
     limit_raw = _query_value(query, "limit")
     limit = clamp_limit(None)
-    if limit_raw is not None:
+    if limit_raw is not None and limit_raw != "":
         try:
-            limit = clamp_limit(int(limit_raw))
+            parsed = int(limit_raw)
         except ValueError:
-            raise InkwireError("invalid_payload", "limit: must be an integer") from None
+            raise InkwireError("invalid_payload", "limit: must be a positive integer") from None
+        if parsed < 1:
+            raise InkwireError("invalid_payload", "limit: must be a positive integer")
+        limit = clamp_limit(parsed)
 
     list_filter = ListFilter(
         status=status,

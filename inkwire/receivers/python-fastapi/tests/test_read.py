@@ -1,3 +1,5 @@
+import pytest
+
 from tests.conftest import error_code
 
 
@@ -54,10 +56,15 @@ def test_limit_defaults_to_20_and_clamps_at_100(api, create):
     assert len(api.get("/api/content?limit=500").json()["items"]) == 3
 
 
-def test_limit_must_be_an_integer(api):
-    response = api.get("/api/content?limit=abc")
+@pytest.mark.parametrize("raw", ["abc", "0", "-5", "1.5"])
+def test_limit_must_be_a_positive_integer(api, raw):
+    response = api.get(f"/api/content?limit={raw}")
     assert response.status_code == 400
     assert error_code(response) == "invalid_payload"
+
+
+def test_empty_limit_means_the_default(api):
+    assert api.get("/api/content?limit=").status_code == 200
 
 
 def test_status_filter_must_be_known(api):
