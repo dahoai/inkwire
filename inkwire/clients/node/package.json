@@ -1,8 +1,8 @@
 {
   "name": "inkwire-client",
-  "version": "0.4.0",
+  "version": "1.0.0",
   "type": "module",
-  "description": "Client SDK for an Inkwire receiver: publish, read, edit, delete and upload media (idempotent, retrying, typed errors).",
+  "description": "Client SDK for an Inkwire receiver: publish, read, edit, delete and upload media, list terms and the media library (idempotent, retrying, typed errors).",
   "license": "MIT",
   "repository": {
     "type": "git",

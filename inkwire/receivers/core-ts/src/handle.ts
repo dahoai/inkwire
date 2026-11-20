@@ -609,6 +609,7 @@ export function discoveryBody(config: InkwireConfig, store?: ContentStore) {
     "terms",
     ...(config.schedule ? ["schedule"] : []),
     ...(store?.saveMedia ? ["media"] : []),
+    ...(store?.saveMedia && config.fetchMedia ? ["media_url"] : []),
     ...(store?.listMedia ? ["media_list"] : []),
     ...(store?.updateMedia ? ["media_update"] : []),
   ];

@@ -15,7 +15,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from inkwire_receiver.app import create_app  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
 from inkwire_receiver import (  # noqa: E402
+    FileStore,
     InkwireConfig,
     Limits,
     MemoryStore,
@@ -42,7 +44,6 @@ def make_config(**overrides) -> InkwireConfig:
         site=Site(name="Acme", url="https://acme.test"),
         kinds=["post", "page"],
         limits=Limits(markdown_bytes=1000, media_bytes=1024),
-        features=["list", "get", "update", "delete", "media"],
     )
     values.update(overrides)
     return InkwireConfig(**values)
@@ -124,3 +125,35 @@ def create(api):
         return response.json()
 
     return _create
+
+
+@pytest.fixture
+def client(app):
+    """A FastAPI ``TestClient`` on the same app as ``api``."""
+    return TestClient(app)
+
+
+def bearer(key: str = FULL_KEY) -> dict[str, str]:
+    return {"authorization": f"Bearer {key}"}
+
+
+@pytest.fixture(params=["memory", "file"])
+def any_store(request, tmp_path):
+    """Both shipped stores: every store-level behaviour must hold for each."""
+    if request.param == "memory":
+        return MemoryStore(media_url_base="https://media.test")
+    return FileStore(tmp_path, media_url_base="https://media.test")
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    """A strictly increasing store clock (one second per call), so ``created_at`` order is exact."""
+    state = {"n": 0}
+
+    def tick() -> str:
+        state["n"] += 1
+        return f"2026-01-01T00:{state['n'] // 60:02d}:{state['n'] % 60:02d}.000Z"
+
+    monkeypatch.setattr("inkwire_receiver.store.now_iso", tick)
+    monkeypatch.setattr("inkwire_receiver.file_store.now_iso", tick)
+    return tick

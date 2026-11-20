@@ -62,6 +62,8 @@ def test_patch_seo_merges_per_key(api, create):
         "title": "Search title",
         "description": "Search description",
         "noindex": True,
+        "og_title": "Search title",
+        "og_description": "Search description",
     }
 
 

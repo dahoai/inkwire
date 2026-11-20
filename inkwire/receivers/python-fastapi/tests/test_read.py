@@ -115,6 +115,8 @@ def test_get_returns_the_full_entry_with_an_etag(api, create):
         "description": "Get excerpt",
         "image_url": "https://images.test/cover.jpg",
         "noindex": True,
+        "og_title": "SEO title",
+        "og_description": "Get excerpt",
     }
     assert entry["canonical_url"] == "https://origin.test/post"
     assert entry["author"] == {"name": "Isaac", "email": "i@example.test"}
@@ -123,7 +125,13 @@ def test_get_returns_the_full_entry_with_an_etag(api, create):
 def test_effective_seo_defaults(api, create):
     created = create(external_id="seo-1", title="Plain title", markdown="x")
     entry = api.get(f"/api/content/{created['id']}").json()
-    assert entry["seo"] == {"title": "Plain title", "description": "Plain title", "noindex": False}
+    assert entry["seo"] == {
+        "title": "Plain title",
+        "description": "Plain title",
+        "noindex": False,
+        "og_title": "Plain title",
+        "og_description": "Plain title",
+    }
 
 
 def test_get_unknown_id_is_404(api):
@@ -142,7 +150,7 @@ def test_read_only_key_can_list_drafts(api, create):
 def test_discovery_advertises_the_wired_features(api):
     body = api.get("/api/inkwire").json()
     assert body["inkwire"] == 1
-    assert body["features"] == ["upsert", "list", "get", "update", "delete", "media"]
+    assert body["features"] == ["upsert", "list", "get", "update", "delete", "terms", "media", "media_list", "media_update"]
     assert body["kinds"] == ["post", "page"]
     assert body["limits"] == {"markdown_bytes": 1000, "media_bytes": 1024}
     assert body["site"] == {"name": "Acme", "url": "https://acme.test"}

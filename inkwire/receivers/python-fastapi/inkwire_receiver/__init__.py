@@ -18,17 +18,21 @@ from .handle import (
     handle_get,
     handle_list,
     handle_media,
+    handle_media_list,
+    handle_media_update,
     handle_patch,
+    handle_terms,
     handle_upsert,
     public_url,
 )
 from .media import IMAGE_TYPES, sniff_image, validate_image
 from .render import ALLOWED_ATTRIBUTES, ALLOWED_TAGS, edits, render_markdown, slugify
-from .schema import Author, ContentInput, MediaUrlInput, PatchInput, PatchSeo, SeoInput
+from .schema import Author, ContentInput, MediaPatchInput, MediaUrlInput, PatchInput, PatchSeo, SeoInput
 from .seo import effective_seo, merge_overrides
 from .store import (
     ContentStore,
     ListFilter,
+    MediaListFilter,
     MediaResult,
     MediaUpload,
     MemoryStore,
@@ -54,6 +58,8 @@ __all__ = [
     "KNOWN_FEATURES",
     "Limits",
     "ListFilter",
+    "MediaListFilter",
+    "MediaPatchInput",
     "MediaResult",
     "MediaUpload",
     "MediaUrlInput",
@@ -76,7 +82,10 @@ __all__ = [
     "handle_get",
     "handle_list",
     "handle_media",
+    "handle_media_list",
+    "handle_media_update",
     "handle_patch",
+    "handle_terms",
     "handle_upsert",
     "merge_overrides",
     "parse_api_keys",

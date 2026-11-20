@@ -6,11 +6,15 @@ from inkwire_client import (
     InkwireClientError,
     capabilities,
     edits,
+    UNSET,
     get,
     list as list_content,
+    list_media,
     publish,
     remove,
+    terms,
     update,
+    update_media,
     upload_media,
 )
 
@@ -171,3 +175,181 @@ def test_edits_helper():
     with pytest.raises(InkwireClientError) as ei3:
         edits("repeat repeat repeat", [{"find": "repeat", "replace": "once"}])
     assert ei3.value.code == "edit_ambiguous"
+
+
+def test_publish_sends_the_new_content_fields_unchanged(monkeypatch):
+    transport, calls = make_transport([(200, {"id": "post:1", "external_id": "e", "url": "u", "slug": "s", "status": "draft", "created": True})])
+    monkeypatch.setattr("inkwire_client._transport", transport, raising=False)
+    payload = {
+        "external_id": "e",
+        "title": "T",
+        "markdown": "x",
+        "categories": ["Guides"],
+        "cover_image_url": "https://images.test/c.jpg",
+        "cover_image_alt": "A red bicycle",
+        "seo": {
+            "og_title": "Card title",
+            "og_description": "Card description",
+            "json_ld": '{"@type":"FAQPage"}',
+        },
+    }
+    publish("https://site.test", "k", payload, retries=1)
+    assert json.loads(calls["requests"][0].content) == payload
+
+
+def test_update_sends_nulls_to_clear(monkeypatch):
+    transport, calls = make_transport([(200, {"id": "post:p-1"}, {"etag": '"e2"'})])
+    monkeypatch.setattr("inkwire_client._transport", transport, raising=False)
+    patch = {"categories": None, "cover_image_alt": None, "seo": {"json_ld": None, "og_title": "Keep"}}
+    update("https://site.test", "k", "post:p-1", patch)
+    assert json.loads(calls["requests"][0].content) == patch
+
+
+def test_list_filters_by_category(monkeypatch):
+    transport, calls = make_transport([(200, {"items": [], "next_cursor": None})])
+    monkeypatch.setattr("inkwire_client._transport", transport, raising=False)
+    list_content("https://site.test", "k", category="Guides", tag="seo", cursor="abc", external_id="e", slug="s")
+    query = dict(calls["requests"][0].url.params)
+    assert query == {"category": "Guides", "tag": "seo", "cursor": "abc", "external_id": "e", "slug": "s"}
+
+
+def test_list_leaves_out_filters_that_were_not_given(monkeypatch):
+    transport, calls = make_transport([(200, {"items": [], "next_cursor": None})])
+    monkeypatch.setattr("inkwire_client._transport", transport, raising=False)
+    list_content("https://site.test", "k")
+    assert dict(calls["requests"][0].url.params) == {}
+
+
+def test_capabilities_pass_the_site_description_and_language_through(monkeypatch):
+    data = {
+        "inkwire": 1,
+        "site": {"name": "Acme", "url": "https://acme.test", "description": "Acme's blog", "language": "en"},
+        "features": ["upsert", "terms", "media_list"],
+        "kinds": ["post"],
+    }
+    transport, _ = make_transport([(200, data)])
+    monkeypatch.setattr("inkwire_client._transport", transport, raising=False)
+    cap = capabilities("https://site.test", "k")
+    assert cap["site"]["description"] == "Acme's blog" and cap["site"]["language"] == "en"
+    assert cap["limits"] == {}
+
+
+def test_terms_without_filters(monkeypatch):
+    items = [{"kind": "tag", "name": "SEO", "slug": "seo", "count": 12}]
+    transport, calls = make_transport([(200, {"items": items})])
+    monkeypatch.setattr("inkwire_client._transport", transport, raising=False)
+    result = terms("https://site.test", "k")
+    assert result == {"items": items}
+    request = calls["requests"][0]
+    assert request.method == "GET" and request.url.path == "/api/terms"
+    assert dict(request.url.params) == {}
+    assert request.headers["authorization"] == "Bearer k"
+
+
+def test_terms_with_filters(monkeypatch):
+    transport, calls = make_transport([(200, {"items": []})])
+    monkeypatch.setattr("inkwire_client._transport", transport, raising=False)
+    terms("https://site.test", "k", kind="category", search="gui", limit=5)
+    assert dict(calls["requests"][0].url.params) == {"kind": "category", "search": "gui", "limit": "5"}
+
+
+def test_terms_raises_a_typed_error_for_a_bad_kind(monkeypatch):
+    transport, _ = make_transport([(400, {"error": {"code": "invalid_payload", "message": "kind: must be 'tag' or 'category'"}})])
+    monkeypatch.setattr("inkwire_client._transport", transport, raising=False)
+    with pytest.raises(InkwireClientError) as ei:
+        terms("https://site.test", "k", kind="color")  # type: ignore[arg-type]
+    assert ei.value.code == "invalid_payload" and ei.value.http_status == 400
+
+
+def test_list_media_query_params(monkeypatch):
+    page = {
+        "items": [{"id": "m1", "url": "https://site.test/m/a.png", "alt": "A", "title": "T", "mime_type": "image/png", "created_at": "2026-01-01T00:00:00.000Z"}],
+        "next_cursor": "c2",
+    }
+    transport, calls = make_transport([(200, page)])
+    monkeypatch.setattr("inkwire_client._transport", transport, raising=False)
+    assert list_media("https://site.test", "k", search="bike", limit=2, cursor="c1") == page
+    request = calls["requests"][0]
+    assert request.method == "GET" and request.url.path == "/api/media"
+    assert dict(request.url.params) == {"search": "bike", "limit": "2", "cursor": "c1"}
+
+
+def test_list_media_without_filters(monkeypatch):
+    transport, calls = make_transport([(200, {"items": [], "next_cursor": None})])
+    monkeypatch.setattr("inkwire_client._transport", transport, raising=False)
+    list_media("https://site.test", "k")
+    assert dict(calls["requests"][0].url.params) == {}
+
+
+def test_list_media_bad_cursor_is_a_typed_error(monkeypatch):
+    transport, _ = make_transport([(400, {"error": {"code": "invalid_payload", "message": "cursor"}})])
+    monkeypatch.setattr("inkwire_client._transport", transport, raising=False)
+    with pytest.raises(InkwireClientError) as ei:
+        list_media("https://site.test", "k", cursor="!!!")
+    assert ei.value.code == "invalid_payload"
+
+
+def test_update_media_sends_only_what_was_given(monkeypatch):
+    item = {"id": "m1", "url": "https://site.test/m/a.png", "alt": "New", "mime_type": "image/png", "created_at": "2026-01-01T00:00:00.000Z"}
+    transport, calls = make_transport([(200, item), (200, item), (200, item)])
+    monkeypatch.setattr("inkwire_client._transport", transport, raising=False)
+    assert update_media("https://site.test", "k", "m1", alt="New") == item
+    update_media("https://site.test", "k", "m1", title="Only title")
+    update_media("https://site.test", "k", "m1", alt="A", title="T")
+    bodies = [json.loads(r.content) for r in calls["requests"]]
+    assert bodies == [{"alt": "New"}, {"title": "Only title"}, {"alt": "A", "title": "T"}]
+    first = calls["requests"][0]
+    assert first.method == "PATCH" and first.url.path == "/api/media/m1"
+    assert first.headers["content-type"] == "application/json" and first.headers["authorization"] == "Bearer k"
+
+
+def test_update_media_none_clears_and_unset_is_not_sent(monkeypatch):
+    transport, calls = make_transport([(200, {"id": "m1"}), (200, {"id": "m1"})])
+    monkeypatch.setattr("inkwire_client._transport", transport, raising=False)
+    update_media("https://site.test", "k", "m1", alt=None)
+    update_media("https://site.test", "k", "m1", alt=None, title="Kept")
+    assert [json.loads(r.content) for r in calls["requests"]] == [{"alt": None}, {"alt": None, "title": "Kept"}]
+
+
+def test_update_media_needs_at_least_one_field(monkeypatch):
+    transport, calls = make_transport([(200, {})])
+    monkeypatch.setattr("inkwire_client._transport", transport, raising=False)
+    with pytest.raises(InkwireClientError) as ei:
+        update_media("https://site.test", "k", "m1")
+    assert ei.value.code == "invalid_payload" and calls["n"] == 0
+    with pytest.raises(InkwireClientError):
+        update_media("https://site.test", "k", "m1", alt=UNSET, title=UNSET)
+
+
+def test_update_media_quotes_the_id(monkeypatch):
+    transport, calls = make_transport([(200, {"id": "x"})])
+    monkeypatch.setattr("inkwire_client._transport", transport, raising=False)
+    update_media("https://site.test", "k", "a/b c", alt="x")
+    assert calls["requests"][0].url.raw_path == b"/api/media/a%2Fb%20c"
+
+
+def test_update_media_errors_are_typed(monkeypatch):
+    transport, _ = make_transport([(404, {"error": {"code": "not_found", "message": "no media"}}), (403, {"error": {"code": "forbidden", "message": "read-only"}})])
+    monkeypatch.setattr("inkwire_client._transport", transport, raising=False)
+    with pytest.raises(InkwireClientError) as missing:
+        update_media("https://site.test", "k", "nope", alt="x")
+    assert (missing.value.code, missing.value.http_status) == ("not_found", 404)
+    with pytest.raises(InkwireClientError) as forbidden:
+        update_media("https://site.test", "k", "m1", alt="x")
+    assert (forbidden.value.code, forbidden.value.http_status) == ("forbidden", 403)
+
+
+def test_upload_result_carries_type_and_time(monkeypatch):
+    answer = {"id": "m-3", "url": "https://site.test/m/p.png", "alt": "Up", "mime_type": "image/png", "created_at": "2026-07-22T04:00:00.000Z"}
+    transport, _ = make_transport([(200, answer), (200, answer)])
+    monkeypatch.setattr("inkwire_client._transport", transport, raising=False)
+    from_url = upload_media("https://site.test", "k", url="https://ext.test/p.png", alt="Up")
+    from_bytes = upload_media("https://site.test", "k", data=(b"\x89PNG\r\n\x1a\n", "p.png", "image/png"), alt="Up")
+    for result in (from_url, from_bytes):
+        assert result["mime_type"] == "image/png" and result["created_at"] == "2026-07-22T04:00:00.000Z"
+
+
+def test_upload_media_needs_url_or_data():
+    with pytest.raises(InkwireClientError) as ei:
+        upload_media("https://site.test", "k")
+    assert ei.value.code == "invalid_payload"

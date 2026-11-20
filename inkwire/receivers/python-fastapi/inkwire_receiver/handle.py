@@ -17,22 +17,39 @@ from .auth import ApiKey, authorize, require_write
 from .errors import InkwireError
 from .media import validate_image
 from .render import render_markdown, slugify
-from .schema import ContentInput, MediaUrlInput, PatchInput, validation_message
+from .schema import ContentInput, MediaPatchInput, MediaUrlInput, PatchInput, validation_message
 from .seo import effective_seo, merge_overrides, overrides_from_input
 from .store import (
+    DEFAULT_LIMIT,
+    MAX_LIMIT,
     ContentStore,
     ListFilter,
+    MediaListFilter,
     MediaResult,
     MediaUpload,
     StoredContent,
-    clamp_limit,
     content_id,
 )
 
 VERSION_HEADER = ("Inkwire-Version", "1")
 DEFAULT_KINDS = ("post", "page")
-KNOWN_FEATURES = ("upsert", "list", "get", "update", "delete", "media")
+KNOWN_FEATURES = (
+    "upsert",
+    "list",
+    "get",
+    "update",
+    "delete",
+    "terms",
+    "schedule",
+    "media",
+    "media_list",
+    "media_update",
+)
 MAX_SLUG_LENGTH = 255
+TERMS_DEFAULT_LIMIT = 100
+TERMS_MAX_LIMIT = 500
+TERMS_SCAN_CAP = 10_000
+TERM_KINDS = ("tag", "category")
 
 Response = tuple[int, dict[str, str], dict]
 
@@ -41,6 +58,8 @@ Response = tuple[int, dict[str, str], dict]
 class Site:
     name: str | None = None
     url: str | None = None
+    description: str | None = None
+    language: str | None = None
 
 
 @dataclass
@@ -51,12 +70,17 @@ class Limits:
 
 @dataclass
 class InkwireConfig:
-    """What the adapter tells the core about its site."""
+    """What the adapter tells the core about its site.
+
+    The advertised features come from the store (media, media_list, media_update) and from
+    ``schedule``: set it only when the site really holds a ``published`` entry with a future
+    ``published_at`` back until that time. The file store has no renderer, so it does not.
+    """
 
     site: Site | None = None
     kinds: list[str] = field(default_factory=lambda: list(DEFAULT_KINDS))
     limits: Limits | None = None
-    features: list[str] | None = None
+    schedule: bool = False
     url_for: Callable[[StoredContent], str] | None = None
 
 
@@ -134,6 +158,20 @@ def _query_value(query: Any, name: str) -> str | None:
     return value or None
 
 
+def _query_limit(query: Any, default: int, maximum: int) -> int:
+    """``limit``: a positive integer, clamped to ``maximum``; anything else is a 400."""
+    raw = _query_value(query, "limit")
+    if raw is None:
+        return default
+    try:
+        parsed = int(raw)
+    except ValueError:
+        raise InkwireError("invalid_payload", "limit: must be a positive integer") from None
+    if parsed < 1:
+        raise InkwireError("invalid_payload", "limit: must be a positive integer")
+    return min(parsed, maximum)
+
+
 # --- config helpers ---------------------------------------------------------
 
 
@@ -177,7 +215,7 @@ def public_url(entry: StoredContent, config: InkwireConfig | None = None) -> str
 
 
 def _summary(entry: StoredContent, config: InkwireConfig | None) -> dict:
-    return {
+    summary = {
         "id": entry.get("id", ""),
         "external_id": entry.get("external_id"),
         "kind": entry.get("kind", "post"),
@@ -190,6 +228,9 @@ def _summary(entry: StoredContent, config: InkwireConfig | None) -> dict:
         "published_at": entry.get("published_at"),
         "updated_at": entry.get("updated_at"),
     }
+    if entry.get("categories") is not None:  # absent, not [], once cleared or never set
+        summary["categories"] = list(entry["categories"])
+    return summary
 
 
 def _full(entry: StoredContent, config: InkwireConfig | None) -> dict:
@@ -199,6 +240,7 @@ def _full(entry: StoredContent, config: InkwireConfig | None) -> dict:
             "markdown": entry.get("markdown", ""),
             "html": entry.get("html") or render_markdown(entry.get("markdown", "")),
             "cover_image_url": entry.get("cover_image_url"),
+            "cover_image_alt": entry.get("cover_image_alt"),
             "canonical_url": entry.get("canonical_url"),
             "author": entry.get("author"),
             "seo": effective_seo(entry),
@@ -294,7 +336,9 @@ async def handle_upsert(
         "html": render_markdown(payload.markdown),
         "excerpt": payload.excerpt,
         "tags": payload.tags,
+        "categories": payload.categories,
         "cover_image_url": payload.cover_image_url,
+        "cover_image_alt": payload.cover_image_alt,
         "canonical_url": payload.canonical_url,
         "seo": overrides_from_input(payload.seo),
         "author": (payload.author.model_dump(exclude_none=True) or None) if payload.author else None,
@@ -329,7 +373,7 @@ async def handle_list(
     store: ContentStore,
     config: InkwireConfig | None = None,
 ) -> Response:
-    """List entries: ``status``, ``kind``, ``tag``, ``search``, ``external_id``, ``slug``, ``limit``, ``cursor``."""
+    """List entries: ``status``, ``kind``, ``tag``, ``category``, ``search``, ``external_id``, ``slug``, ``limit``, ``cursor``."""
     api_key = authorize(auth_header, keys)
     key = api_key.scope
 
@@ -337,25 +381,15 @@ async def handle_list(
     if status is not None and status not in ("draft", "published"):
         raise InkwireError("invalid_payload", "status: must be 'draft' or 'published'")
 
-    limit_raw = _query_value(query, "limit")
-    limit = clamp_limit(None)
-    if limit_raw is not None and limit_raw != "":
-        try:
-            parsed = int(limit_raw)
-        except ValueError:
-            raise InkwireError("invalid_payload", "limit: must be a positive integer") from None
-        if parsed < 1:
-            raise InkwireError("invalid_payload", "limit: must be a positive integer")
-        limit = clamp_limit(parsed)
-
     list_filter = ListFilter(
         status=status,
         kind=_query_value(query, "kind"),
         tag=_query_value(query, "tag"),
+        category=_query_value(query, "category"),
         search=_query_value(query, "search"),
         external_id=_query_value(query, "external_id"),
         slug=_query_value(query, "slug"),
-        limit=limit,
+        limit=_query_limit(query, DEFAULT_LIMIT, MAX_LIMIT),
         cursor=_query_value(query, "cursor"),
     )
     items, next_cursor = await store.list(key, list_filter)
@@ -432,7 +466,16 @@ async def handle_patch(
         "updated_at": now,
         "version": int(existing.get("version") or 1) + 1,
     }
-    for name in ("title", "excerpt", "tags", "cover_image_url", "canonical_url", "status"):
+    for name in (
+        "title",
+        "excerpt",
+        "tags",
+        "categories",
+        "cover_image_url",
+        "cover_image_alt",
+        "canonical_url",
+        "status",
+    ):
         if name in sent:
             entry[name] = getattr(payload, name)  # type: ignore[literal-required]
     if "author" in sent:
@@ -475,6 +518,67 @@ async def handle_delete(
     return _ok({"id": str(id), "deleted": True})
 
 
+# --- GET /api/terms ---------------------------------------------------------
+
+
+async def _scan_terms(store: ContentStore, key: str) -> dict[str, dict[str, dict]]:
+    """Page through the store's list (drafts and every kind included), at most ``TERMS_SCAN_CAP`` entries.
+
+    Returns ``{kind: {lowercased name: {"count": n, "spellings": {spelling: uses}}}}``; ``count`` is
+    the number of entries carrying the term, however many times one entry spells it.
+    """
+    found: dict[str, dict[str, dict]] = {kind: {} for kind in TERM_KINDS}
+    scanned = 0
+    cursor: str | None = None
+    while scanned < TERMS_SCAN_CAP:
+        items, cursor = await store.list(key, ListFilter(limit=MAX_LIMIT, cursor=cursor))
+        for entry in items[: TERMS_SCAN_CAP - scanned]:
+            for kind, names in (("tag", entry.get("tags")), ("category", entry.get("categories"))):
+                seen: set[str] = set()
+                for name in names or []:
+                    folded = name.lower()
+                    term = found[kind].setdefault(folded, {"count": 0, "spellings": {}})
+                    term["spellings"][name] = term["spellings"].get(name, 0) + 1
+                    if folded not in seen:
+                        seen.add(folded)
+                        term["count"] += 1
+        scanned += len(items)
+        if cursor is None or not items:
+            break
+    return found
+
+
+@_handle_errors
+async def handle_terms(
+    *,
+    auth_header: str | None,
+    query: Any,
+    keys: list,
+    store: ContentStore,
+) -> Response:
+    """The tags and categories entries carry: ``kind``, ``search``, ``limit``. Read-only keys may call it."""
+    api_key = authorize(auth_header, keys)
+
+    kind = _query_value(query, "kind")
+    if kind is not None and kind not in TERM_KINDS:
+        raise InkwireError("invalid_payload", "kind: must be 'tag' or 'category'")
+    search = (_query_value(query, "search") or "").lower()
+    limit = _query_limit(query, TERMS_DEFAULT_LIMIT, TERMS_MAX_LIMIT)
+
+    found = await _scan_terms(store, api_key.scope)
+    items: list[dict] = []
+    for term_kind in TERM_KINDS:
+        if kind is not None and kind != term_kind:
+            continue
+        for term in found[term_kind].values():
+            # the most used spelling; ties go to the one seen first (the newest entry's)
+            name = max(term["spellings"], key=lambda spelling: term["spellings"][spelling])
+            if search in name.lower():
+                items.append({"kind": term_kind, "name": name, "slug": slugify(name), "count": term["count"]})
+    items.sort(key=lambda item: (-item["count"], item["name"].lower(), item["name"], item["kind"]))
+    return _ok({"items": items[:limit]})
+
+
 # --- POST /api/media --------------------------------------------------------
 
 
@@ -483,6 +587,12 @@ def _as_upload(upload: Any) -> MediaUpload:
         return upload
     data, filename, content_type = upload
     return MediaUpload(data=bytes(data), filename=str(filename or "image"), content_type=str(content_type or ""))
+
+
+def _require_media(store: ContentStore, method: str) -> None:
+    """A store without the method omits the feature, so its endpoint does not exist."""
+    if not _store_supports(store, method):
+        raise InkwireError("not_found", "this receiver does not offer that media feature")
 
 
 @_handle_errors
@@ -501,6 +611,7 @@ async def handle_media(
     api_key = authorize(auth_header, keys)
     require_write(api_key)
     key = api_key.scope
+    _require_media(store, "media")
 
     if upload is not None:
         media = _as_upload(upload)
@@ -513,8 +624,6 @@ async def handle_media(
         limit = _media_limit(config)
         if limit and len(media.data) > limit:
             raise InkwireError("too_large", f"media: over the receiver's limit of {limit} bytes")
-        if not _store_supports(store, "media"):
-            raise InkwireError("internal", "this store does not support media uploads")
         result: MediaResult = await store.media(  # type: ignore[attr-defined]
             key,
             MediaUpload(
@@ -534,37 +643,92 @@ async def handle_media(
 
     payload = _validate(MediaUrlInput, raw_body)
     if not _store_supports(store, "fetch_media"):
-        raise InkwireError("internal", "this store cannot fetch remote media")
+        raise InkwireError(
+            "invalid_payload", "media: fetching a url is not enabled on this receiver; upload the file instead"
+        )
     try:
         result = await store.fetch_media(key, payload.url, payload.alt)  # type: ignore[attr-defined]
     except InkwireError:
         raise
     except Exception:  # network, DNS, TLS, a store without a fetcher: the url could not be fetched
         raise InkwireError("invalid_payload", "media: could not fetch the url") from None
-    body = result.as_dict() if isinstance(result, MediaResult) else dict(result)
-    return _ok(body)
+    return _ok(result.as_dict())
+
+
+# --- GET /api/media ---------------------------------------------------------
+
+
+@_handle_errors
+async def handle_media_list(
+    *,
+    auth_header: str | None,
+    query: Any,
+    keys: list,
+    store: ContentStore,
+) -> Response:
+    """The media library, newest first: ``search``, ``limit``, ``cursor``. Read-only keys may call it."""
+    api_key = authorize(auth_header, keys)
+    _require_media(store, "list_media")
+    media_filter = MediaListFilter(
+        search=_query_value(query, "search"),
+        limit=_query_limit(query, DEFAULT_LIMIT, MAX_LIMIT),
+        cursor=_query_value(query, "cursor"),
+    )
+    items, next_cursor = await store.list_media(api_key.scope, media_filter)  # type: ignore[attr-defined]
+    return _ok({"items": [item.as_dict() for item in items], "next_cursor": next_cursor})
+
+
+# --- PATCH /api/media/{id} --------------------------------------------------
+
+
+@_handle_errors
+async def handle_media_update(
+    *,
+    auth_header: str | None,
+    id: str,
+    raw_body: Any,
+    keys: list,
+    store: ContentStore,
+) -> Response:
+    """Set or clear (``null``) a media item's ``alt`` and/or ``title``."""
+    api_key = authorize(auth_header, keys)
+    require_write(api_key)
+    _require_media(store, "update_media")
+
+    payload = _validate(MediaPatchInput, raw_body)
+    item = await store.update_media(api_key.scope, str(id), payload.changes())  # type: ignore[attr-defined]
+    if item is None:
+        raise InkwireError("not_found", f"no media with id '{id}'")
+    return _ok(item.as_dict())
 
 
 # --- GET /api/inkwire -------------------------------------------------------
 
 
-def discovery_body(config: InkwireConfig | None = None) -> dict:
-    """``{inkwire, site?, features, kinds, limits?}`` — ``upsert`` is always advertised."""
-    config = config or InkwireConfig()
-    features = ["upsert"]
-    for feature in config.features or []:
-        if feature not in features:
+def _features(store: ContentStore, config: InkwireConfig) -> list[str]:
+    """What this receiver can do: fixed for content and terms, derived from the store for media."""
+    features = ["upsert", "list", "get", "update", "delete", "terms"]
+    if config.schedule:
+        features.append("schedule")
+    for feature, method in (("media", "media"), ("media_list", "list_media"), ("media_update", "update_media")):
+        if _store_supports(store, method):
             features.append(feature)
+    return features
+
+
+def discovery_body(store: ContentStore, config: InkwireConfig | None = None) -> dict:
+    """``{inkwire, site?, features, kinds, limits?}``."""
+    config = config or InkwireConfig()
     body: dict = {"inkwire": 1}
     if config.site is not None:
-        site = {}
-        if config.site.name:
-            site["name"] = config.site.name
-        if config.site.url:
-            site["url"] = config.site.url
+        site = {
+            name: value
+            for name in ("name", "url", "description", "language")
+            if (value := getattr(config.site, name))
+        }
         if site:
             body["site"] = site
-    body["features"] = features
+    body["features"] = _features(store, config)
     body["kinds"] = _kinds(config)
     if config.limits is not None:
         limits = {}
@@ -579,11 +743,11 @@ def discovery_body(config: InkwireConfig | None = None) -> dict:
 
 @_handle_errors
 async def handle_discovery(
-    *, auth_header: str | None, keys: list, config: InkwireConfig | None = None
+    *, auth_header: str | None, keys: list, store: ContentStore, config: InkwireConfig | None = None
 ) -> Response:
     """Discovery: what this receiver can do (same bearer auth as everything else)."""
     authorize(auth_header, keys)
-    return _ok(discovery_body(config))
+    return _ok(discovery_body(store, config))
 
 
 __all__ = [
@@ -600,7 +764,10 @@ __all__ = [
     "handle_get",
     "handle_list",
     "handle_media",
+    "handle_media_list",
+    "handle_media_update",
     "handle_patch",
+    "handle_terms",
     "handle_upsert",
     "public_url",
 ]

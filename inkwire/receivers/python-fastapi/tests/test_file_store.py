@@ -209,7 +209,7 @@ def test_media_is_written_with_a_meta_sidecar(tmp_path):
     assert (tmp_path / "media" / name).read_bytes() == PNG
     meta = json.loads((tmp_path / "media" / f"{name}.meta.json").read_text())
     assert meta["alt"] == "One pixel"
-    assert meta["content_type"] == "image/png"
+    assert meta["mime_type"] == "image/png"
 
 
 def test_fetch_media_uses_the_injected_fetcher_and_refuses_svg(tmp_path):
@@ -232,3 +232,44 @@ def test_fetch_media_uses_the_injected_fetcher_and_refuses_svg(tmp_path):
 def test_no_fetcher_means_no_remote_media(tmp_path):
     with pytest.raises(InkwireError):
         run(FileStore(tmp_path).fetch_media(KEY, "https://example.test/a.png"))
+
+
+def test_categories_cover_alt_and_the_new_seo_overrides_survive_the_frontmatter(tmp_path):
+    store = FileStore(tmp_path)
+    json_ld = '{"@context":"https://schema.org","@type":"FAQPage"}'
+    run(
+        store.save(
+            KEY,
+            entry(
+                categories=["Guides", "How-to: a title"],
+                cover_image_url="https://images.test/c.jpg",
+                cover_image_alt="A: tricky 'alt'",
+                seo={"og_title": "OG: title", "og_description": "OG description", "json_ld": json_ld, "noindex": True},
+            ),
+        )
+    )
+    front, _ = split_frontmatter((tmp_path / "post" / "hello-world.md").read_text())
+    assert front["categories"] == ["Guides", "How-to: a title"]
+    assert front["cover_image_alt"] == "A: tricky 'alt'"
+    assert front["seo"]["json_ld"] == json_ld
+
+    again = run(FileStore(tmp_path).get(KEY, "post:hello-world"))
+    assert again["categories"] == ["Guides", "How-to: a title"]
+    assert again["cover_image_alt"] == "A: tricky 'alt'"
+    assert again["seo"] == {"og_title": "OG: title", "og_description": "OG description", "json_ld": json_ld, "noindex": True}
+
+
+def test_unset_categories_and_cover_alt_are_not_written(tmp_path):
+    store = FileStore(tmp_path)
+    run(store.save(KEY, entry(categories=None, cover_image_alt=None)))
+    text = (tmp_path / "post" / "hello-world.md").read_text()
+    assert "categories" not in text and "cover_image_alt" not in text
+    again = run(store.get(KEY, "post:hello-world"))
+    assert again["categories"] is None and again["cover_image_alt"] is None
+
+
+def test_a_hand_written_file_may_carry_categories(tmp_path):
+    (tmp_path / "post").mkdir()
+    (tmp_path / "post" / "by-hand.md").write_text("---\ntitle: By hand\ncategories: [A, B]\ncover_image_alt: Hand alt\n---\n\nbody")
+    got = run(FileStore(tmp_path).get(KEY, "post:by-hand"))
+    assert got["categories"] == ["A", "B"] and got["cover_image_alt"] == "Hand alt"

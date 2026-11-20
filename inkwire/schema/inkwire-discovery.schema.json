@@ -42,7 +42,7 @@
         "type": "string",
         "pattern": "^[a-z][a-z0-9_]*$"
       },
-      "description": "upsert is always present. Known: upsert, list, get, update, delete, terms, schedule, media, media_list, media_update. Open set for the future."
+      "description": "upsert is always present. Known: upsert, list, get, update, delete, terms, schedule, media, media_url, media_list, media_update. Open set for the future."
     },
     "kinds": {
       "type": "array",

@@ -115,8 +115,8 @@ def test_a_store_without_media_support_says_so():
     store.media = None  # type: ignore[assignment]
     api = Api(create_app(store=store, api_keys=KEYS, config=make_config()))
     response = api.post_media(files={"file": ("px.png", PNG, "image/png")})
-    assert response.status_code == 500
-    assert error_code(response) == "internal"
+    assert response.status_code == 404
+    assert error_code(response) == "not_found"
 
 
 def test_read_only_key_cannot_upload(api):

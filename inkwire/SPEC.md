@@ -151,7 +151,7 @@ auth as everything else.
 {
   "inkwire": 1,
   "site": { "name": "Acme", "url": "https://acme.com", "description": "Acme's blog", "language": "en" },
-  "features": ["upsert", "list", "get", "update", "delete", "terms", "schedule", "media", "media_list", "media_update"],
+  "features": ["upsert", "list", "get", "update", "delete", "terms", "schedule", "media", "media_url", "media_list", "media_update"],
   "kinds": ["post", "page"],
   "limits": { "markdown_bytes": 1000000, "media_bytes": 10000000 }
 }
@@ -225,11 +225,11 @@ a case-insensitive substring of the name, `limit` defaults to 100, at most 500) 
 Most used first, then by name (compared case-insensitively). Names that differ only in case are one term (the most used
 spelling is reported). `count` is the number of entries carrying it, drafts included.
 
-### Media: `POST /api/media`  (feature `media`)
+### Media: `POST /api/media`  (feature `media`; `media_url` for the JSON form)
 
-Either `multipart/form-data` with a `file` part and an optional `alt` field, or JSON
-`{ "url": "https://...", "alt": "..." }` for the receiver to fetch (SSRF-guarded: public
-`http(s)` hosts only). Response:
+`multipart/form-data` with a `file` part and an optional `alt` field. A receiver that also advertises `media_url`
+accepts JSON `{ "url": "https://...", "alt": "..." }` for it to fetch (SSRF-guarded: public `http(s)` hosts only);
+without `media_url` that form answers `400 invalid_payload`. Response:
 
 ```json
 { "id": "...", "url": "https://site/uploads/x.jpg", "alt": "...", "mime_type": "image/jpeg", "created_at": "2026-07-22T04:00:00.000Z" }

@@ -1,7 +1,7 @@
 [project]
 name = "inkwire-client"
-version = "0.2.0"
-description = "Client SDK for publishing posts to an Inkwire receiver (idempotent, retrying, typed errors)."
+version = "1.0.0"
+description = "Python client for Inkwire receivers: publish, read, edit, terms and media (idempotent, retrying, typed errors)."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

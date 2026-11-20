@@ -4,7 +4,7 @@ Layout::
 
     <root>/<kind>/<slug>.md          YAML frontmatter + the markdown body
     <root>/media/<hex>-<name>        uploaded images
-    <root>/media/<hex>-<name>.meta.json
+    <root>/media/<hex>-<name>.meta.json   sidecar: id, filename, mime_type, created_at, alt, title, size
 
 Files the site already has are first-class: a file with no frontmatter (or partial frontmatter)
 is read with defaults — the kind comes from the folder, the title from the first ``# `` heading,
@@ -19,6 +19,7 @@ import json
 import os
 import re
 import secrets
+import threading
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -31,13 +32,15 @@ from .render import render_markdown
 from .schema import KIND_RE, SLUG_RE
 from .store import (
     ListFilter,
+    MediaListFilter,
     MediaResult,
     MediaUpload,
     StoredContent,
     fetch_media_bytes,
     matches,
-    newest_first,
+    now_iso,
     paginate,
+    paginate_media,
     safe_filename,
 )
 
@@ -51,14 +54,18 @@ FRONTMATTER_FIELDS = (
     "status",
     "excerpt",
     "tags",
+    "categories",
     "cover_image_url",
+    "cover_image_alt",
     "canonical_url",
     "seo",
     "author",
     "published_at",
     "updated_at",
 )
-SEO_FIELDS = ("title", "description", "image_url", "noindex")
+SEO_FIELDS = ("title", "description", "image_url", "noindex", "og_title", "og_description", "json_ld")
+MEDIA_ID_RE = re.compile(r"[0-9a-f]{16}")
+MEDIA_SIDECAR = ".meta.json"
 
 
 def split_frontmatter(text: str) -> tuple[dict, str]:
@@ -129,6 +136,7 @@ class FileStore:
         self.media_url_base = media_url_base.rstrip("/")
         self._fetcher = fetcher
         self.max_media_bytes = max_media_bytes
+        self._media_lock = threading.Lock()
 
     # --- path safety ------------------------------------------------------
 
@@ -194,7 +202,9 @@ class FileStore:
             "html": render_markdown(body),
             "excerpt": _text(front.get("excerpt")),
             "tags": _tags(front.get("tags")),
+            "categories": _tags(front.get("categories")),
             "cover_image_url": _text(front.get("cover_image_url")),
+            "cover_image_alt": _text(front.get("cover_image_alt")),
             "canonical_url": _text(front.get("canonical_url")),
             "seo": seo,
             "author": author,
@@ -226,7 +236,7 @@ class FileStore:
                 entry = self._read(path, kind, key)
                 if matches(entry, filter):
                     entries.append(entry)
-        return paginate(newest_first(entries), filter)
+        return paginate(entries, filter)
 
     def _kinds(self) -> list[str]:
         if not self.root.is_dir():
@@ -282,23 +292,103 @@ class FileStore:
 
     # --- media ------------------------------------------------------------
 
+    @staticmethod
+    def _atomic_write(path: Path, data: bytes) -> None:
+        tmp = path.with_name(f".{path.name}.tmp-{secrets.token_hex(4)}")
+        try:
+            tmp.write_bytes(data)
+            os.replace(tmp, path)
+        finally:
+            if tmp.exists():
+                tmp.unlink()
+
+    @property
+    def _media_dir(self) -> Path:
+        return self.root / "media"
+
     def _save_media(self, upload: MediaUpload) -> MediaResult:
-        media_dir = self.root / "media"
-        media_dir.mkdir(parents=True, exist_ok=True)
+        self._media_dir.mkdir(parents=True, exist_ok=True)
         hex_id = secrets.token_hex(8)
         extension = extension_for(upload.content_type, upload.filename)
         name = safe_filename(upload.filename)
         if "." not in name:
             name = f"{name}.{extension}"
-        base = f"{hex_id}-{name}"
-        (media_dir / base).write_bytes(upload.data)
+        filename = f"{hex_id}-{name}"
         meta = {
+            "id": hex_id,
+            "filename": filename,
+            "mime_type": upload.content_type,
+            "created_at": now_iso(),
             "alt": upload.alt,
-            "content_type": upload.content_type,
+            "title": None,
             "size": len(upload.data),
         }
-        (media_dir / f"{base}.meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
-        return MediaResult(id=hex_id, url=f"{self.media_url_base}/{base}", alt=upload.alt)
+        # the image first, the sidecar last: a library entry only exists once its sidecar does
+        self._atomic_write(self._media_dir / filename, upload.data)
+        self._write_media_meta(self._media_dir / f"{filename}{MEDIA_SIDECAR}", meta)
+        return self._media_item(meta)
+
+    def _write_media_meta(self, path: Path, meta: dict) -> None:
+        self._atomic_write(path, json.dumps(meta, ensure_ascii=False).encode("utf-8"))
+
+    def _media_item(self, meta: dict) -> MediaResult:
+        return MediaResult(
+            id=meta["id"],
+            url=f"{self.media_url_base}/{meta['filename']}",
+            alt=meta.get("alt"),
+            title=meta.get("title"),
+            mime_type=meta["mime_type"],
+            created_at=meta["created_at"],
+        )
+
+    def _read_media_meta(self, path: Path) -> dict | None:
+        """The sidecar as a dict, or ``None`` when it is not one of ours or its image is gone."""
+        try:
+            meta = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(meta, dict):
+            return None
+        for field in ("id", "filename", "mime_type", "created_at"):
+            if not isinstance(meta.get(field), str):
+                return None
+        filename = meta["filename"]
+        if not MEDIA_ID_RE.fullmatch(meta["id"]) or Path(filename).name != filename:
+            return None
+        if not (path.parent / filename).is_file():
+            return None
+        return meta
+
+    def _find_media_meta(self, id: str) -> tuple[Path, dict] | None:
+        """Ids are opaque to callers; ours are 16 hex characters, so anything else never reaches a path."""
+        if not isinstance(id, str) or not MEDIA_ID_RE.fullmatch(id) or not self._media_dir.is_dir():
+            return None
+        for path in sorted(self._media_dir.glob(f"{id}-*{MEDIA_SIDECAR}")):
+            meta = self._read_media_meta(path)
+            if meta is not None and meta["id"] == id:
+                return path, meta
+        return None
+
+    def _list_media_sync(self, filter: MediaListFilter) -> tuple[list[MediaResult], str | None]:
+        items: list[MediaResult] = []
+        if self._media_dir.is_dir():
+            for path in self._media_dir.glob(f"*{MEDIA_SIDECAR}"):
+                meta = self._read_media_meta(path)
+                if meta is not None:
+                    items.append(self._media_item(meta))
+        return paginate_media(items, filter)
+
+    def _update_media_sync(self, id: str, patch: dict) -> MediaResult | None:
+        with self._media_lock:
+            found = self._find_media_meta(id)
+            if found is None:
+                return None
+            path, meta = found
+            for name in ("alt", "title"):
+                if name in patch:
+                    meta[name] = patch[name]
+            self._write_media_meta(path, meta)
+            return self._media_item(meta)
 
     # --- protocol ---------------------------------------------------------
 
@@ -317,9 +407,18 @@ class FileStore:
     async def media(self, key: str, upload: MediaUpload) -> MediaResult:
         return await asyncio.to_thread(self._save_media, upload)
 
+    async def list_media(self, key: str, filter: MediaListFilter) -> tuple[list[MediaResult], str | None]:
+        return await asyncio.to_thread(self._list_media_sync, filter)
+
+    async def update_media(self, key: str, id: str, patch: dict) -> MediaResult | None:
+        """``patch`` holds only the fields to change; a ``None`` value clears that field."""
+        return await asyncio.to_thread(self._update_media_sync, id, patch)
+
     async def fetch_media(self, key: str, url: str, alt: str | None = None) -> MediaResult:
         if self._fetcher is None:
-            raise InkwireError("internal", "this store cannot fetch remote media")
+            raise InkwireError(
+                "invalid_payload", "media: fetching a url is not enabled on this receiver; upload the file instead"
+            )
         data, filename, content_type = await fetch_media_bytes(self._fetcher, url)
         if self.max_media_bytes and len(data) > self.max_media_bytes:
             raise InkwireError("too_large", f"media: over the receiver's limit of {self.max_media_bytes} bytes")

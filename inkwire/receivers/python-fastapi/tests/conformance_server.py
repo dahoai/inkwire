@@ -1,9 +1,10 @@
 """The receiver the black-box conformance run talks to.
 
-    ../../../.venv/bin/uvicorn tests.conformance_server:app --port 4010
+    uvicorn tests.conformance_server:app --port 4010
+    INKWIRE_CONFORMANCE_STORE=memory uvicorn tests.conformance_server:app --port 4010
 
 A FileStore in a throw-away directory (the run must see the real frontmatter / media
-sidecar code, not the in-memory double), two keys (``dev-key`` read-write,
+sidecar code), or a MemoryStore when ``INKWIRE_CONFORMANCE_STORE=memory``; two keys (``dev-key`` read-write,
 ``audit-key`` read-only), kinds ``post`` and ``page``, and limits small enough that the
 runner's ``$overLimit`` cases stay cheap.
 
@@ -24,7 +25,7 @@ os.environ.setdefault("INKWIRE_SITE_NAME", "Conformance")
 os.environ.setdefault("INKWIRE_SITE_URL", "https://conformance.test")
 os.environ.setdefault("INKWIRE_MEDIA_URL_BASE", "/inkwire-media")
 
-from inkwire_receiver import FileStore, InkwireConfig, InkwireError, Limits, Site  # noqa: E402
+from inkwire_receiver import FileStore, InkwireConfig, InkwireError, Limits, MemoryStore, Site  # noqa: E402
 from inkwire_receiver.app import create_app  # noqa: E402
 
 MARKDOWN_LIMIT = 100_000
@@ -38,7 +39,10 @@ async def stub_fetcher(url: str):
     return PNG, url.rsplit("/", 1)[-1] or "image", "image/png"
 
 
-store = FileStore(tempfile.mkdtemp(prefix="inkwire-conformance-"), fetcher=stub_fetcher, max_media_bytes=MEDIA_LIMIT)
+if os.environ.get("INKWIRE_CONFORMANCE_STORE", "file") == "memory":
+    store = MemoryStore(media_url_base="/inkwire-media", fetcher=stub_fetcher)
+else:
+    store = FileStore(tempfile.mkdtemp(prefix="inkwire-conformance-"), fetcher=stub_fetcher, max_media_bytes=MEDIA_LIMIT)
 
 app = create_app(
     store=store,
@@ -47,6 +51,5 @@ app = create_app(
         site=Site(name="Conformance", url="https://conformance.test"),
         kinds=["post", "page"],
         limits=Limits(markdown_bytes=MARKDOWN_LIMIT, media_bytes=MEDIA_LIMIT),
-        features=["upsert", "list", "get", "update", "delete", "media"],
     ),
 )

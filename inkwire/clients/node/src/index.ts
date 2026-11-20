@@ -1,7 +1,14 @@
-// Inkwire client (protocol v1, revised: /api/content with `kind`, read/edit/delete, media, discovery).
+// Inkwire client (protocol v1): publish, read, edit, delete, terms, media library, discovery.
 
+/** SEO overrides on publish (SPEC "SEO Profile 1"). Only what differs from the derived defaults. */
 export interface SeoPayload {
   title?: string; description?: string; image_url?: string; noindex?: boolean;
+  /** Social card title (Open Graph); defaults to the effective title. */
+  og_title?: string;
+  /** Social card description (Open Graph); defaults to the effective description. */
+  og_description?: string;
+  /** One JSON object (or array of objects) serialized as a string, at most 20000 characters. */
+  json_ld?: string;
 }
 export interface Author { name?: string; email?: string }
 
@@ -9,7 +16,12 @@ export interface Author { name?: string; email?: string }
 export interface PostPayload {
   external_id: string; title: string; markdown: string;
   kind?: string;
-  slug?: string; excerpt?: string; tags?: string[]; cover_image_url?: string;
+  slug?: string; excerpt?: string; tags?: string[];
+  /** A second, coarser grouping next to `tags`. */
+  categories?: string[];
+  cover_image_url?: string;
+  /** Alt text for the cover image. */
+  cover_image_alt?: string;
   canonical_url?: string; seo?: SeoPayload; author?: Author;
   status?: "draft" | "published"; published_at?: string;
 }
@@ -23,10 +35,16 @@ export interface PublishResult {
 /** A subset of the publish fields (`inkwire-patch.schema.json`). `null` clears an optional field; `external_id` cannot change. */
 export interface PatchPayload {
   title?: string; kind?: string; markdown?: string; slug?: string;
-  excerpt?: string | null; tags?: string[] | null;
-  cover_image_url?: string | null; canonical_url?: string | null;
-  /** An object merges per key (an `image_url: null` drops that override); `null` clears them all. */
-  seo?: { title?: string; description?: string; image_url?: string | null; noindex?: boolean } | null;
+  excerpt?: string | null; tags?: string[] | null; categories?: string[] | null;
+  cover_image_url?: string | null; cover_image_alt?: string | null; canonical_url?: string | null;
+  /**
+   * An object merges per key (an `image_url: null` or `json_ld: null` drops that override);
+   * `null` clears them all.
+   */
+  seo?: {
+    title?: string; description?: string; image_url?: string | null; noindex?: boolean;
+    og_title?: string; og_description?: string; json_ld?: string | null;
+  } | null;
   author?: Author | null;
   status?: "draft" | "published";
   published_at?: string | null;
@@ -34,23 +52,43 @@ export interface PatchPayload {
 
 export interface ContentSummary {
   id: string; external_id: string | null; kind: string; title: string; slug: string; url: string;
-  status: "draft" | "published"; excerpt?: string; tags?: string[];
+  status: "draft" | "published"; excerpt?: string; tags?: string[]; categories?: string[];
   published_at: string; updated_at: string;
 }
 /** The effective SEO values (overrides applied over the derived defaults). */
-export interface EffectiveSeo { title: string; description: string; image_url?: string; noindex: boolean }
+export interface EffectiveSeo {
+  title: string; description: string; image_url?: string; noindex: boolean;
+  /** `seo.og_title ?? title`. */
+  og_title: string;
+  /** `seo.og_description ?? description`. */
+  og_description: string;
+  /** The serialized JSON-LD override; absent when not set. */
+  json_ld?: string;
+}
 export interface Content extends ContentSummary {
-  markdown: string; cover_image_url?: string; canonical_url?: string; author?: Author; seo: EffectiveSeo;
+  markdown: string; cover_image_url?: string; cover_image_alt?: string; canonical_url?: string; author?: Author; seo: EffectiveSeo;
 }
 
 export interface Capabilities {
-  features: string[]; kinds: string[]; limits: { markdown_bytes?: number; media_bytes?: number };
-  /** Only on receivers that answer discovery. */
-  inkwire?: number; site?: { name?: string; url?: string };
+  /**
+   * What the receiver implements. `upsert` is always present. Known: `upsert`, `list`, `get`, `update`,
+   * `delete`, `terms`, `schedule`, `media`, `media_list`, `media_update` (an open set).
+   */
+  features: string[];
+  /** The kinds the receiver holds; never send others. */
+  kinds: string[];
+  /** Ceilings in bytes; a request over one answers `too_large`. */
+  limits: { markdown_bytes?: number; media_bytes?: number };
+  /** The protocol version; absent when the receiver has no discovery endpoint. */
+  inkwire?: number;
+  /** About the site; absent when the receiver has no discovery endpoint. `language` is a BCP 47 tag. */
+  site?: { name?: string; url?: string; description?: string; language?: string };
 }
 
 export interface ListQuery {
-  status?: "draft" | "published"; kind?: string; tag?: string; search?: string;
+  status?: "draft" | "published"; kind?: string; tag?: string;
+  /** Entries carrying this one category. */
+  category?: string; search?: string;
   external_id?: string; slug?: string; limit?: number; cursor?: string;
 }
 export interface ListResult { items: ContentSummary[]; next_cursor: string | null }
@@ -58,7 +96,38 @@ export interface ListResult { items: ContentSummary[]; next_cursor: string | nul
 /** An entry with the `ETag` it was read at; pass `etag` back as `opts.ifMatch` to edit safely. */
 export interface ContentWithEtag { content: Content; etag: string | null }
 export interface DeleteResult { id: string; deleted: boolean }
-export interface MediaResult { id: string; url: string; alt?: string }
+
+export interface TermsQuery {
+  kind?: "tag" | "category";
+  /** Case-insensitive substring of the term name. */
+  search?: string;
+  /** Default 100, at most 500. */
+  limit?: number;
+}
+/** A tag or category some entry carries. `count` is the number of entries carrying it, drafts included. */
+export interface Term { kind: "tag" | "category"; name: string; slug: string; count: number }
+export interface TermsResult { items: Term[] }
+
+/** An image in the receiver's media library. */
+export interface MediaItem {
+  id: string; url: string; alt?: string; title?: string; mime_type: string;
+  /** ISO-8601 timestamp. */
+  created_at: string;
+}
+/** The answer to `uploadMedia`: the library item that was created. */
+export type MediaResult = MediaItem;
+
+export interface MediaListQuery {
+  /** Matches the alt text, title and filename. */
+  search?: string;
+  /** Default 20, at most 100. */
+  limit?: number;
+  /** Pass the previous page's `next_cursor`. */
+  cursor?: string;
+}
+export interface MediaListResult { items: MediaItem[]; next_cursor: string | null }
+/** A subset of the media fields; `null` clears one. At least one key. */
+export interface MediaPatch { alt?: string | null; title?: string | null }
 
 export type MediaInput =
   | { url: string; alt?: string }
@@ -120,6 +189,14 @@ async function json<T>(res: Response): Promise<T> {
 }
 
 const idPath = (id: string) => `/api/content/${encodeURIComponent(id)}`;
+const mediaPath = (id: string) => `/api/media/${encodeURIComponent(id)}`;
+/** `?a=b&...` from the defined, non-empty values (or an empty string). */
+function queryString(query: object): string {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(query)) if (v !== undefined && v !== null && v !== "") qs.set(k, String(v));
+  const q = qs.toString();
+  return q ? `?${q}` : "";
+}
 const JSON_HEADERS = { "content-type": "application/json" };
 
 /** POST /api/content: create or update one entry, upserting on `external_id` (and `kind`). */
@@ -134,20 +211,17 @@ export async function publish(
   return json<PublishResult>(res);
 }
 
-/** GET /api/inkwire. A receiver without discovery (404) is upsert-only, `post` only, no limits. */
+/** GET /api/inkwire. A receiver without discovery (404) reads as upsert-only, `post` only, no limits (SPEC "Discovery"). */
 export async function capabilities(baseUrl: string, apiKey: string, opts: RequestOptions = {}): Promise<Capabilities> {
   const res = await call(baseUrl, apiKey, { method: "GET", path: "/api/inkwire", allow404: true }, opts);
   if (res.status === 404) return { features: ["upsert"], kinds: ["post"], limits: {} };
-  const d = await json<Partial<Capabilities>>(res);
-  return { ...d, features: d.features ?? ["upsert"], kinds: d.kinds ?? ["post"], limits: d.limits ?? {} };
+  const d = await json<Omit<Capabilities, "limits"> & { limits?: Capabilities["limits"] }>(res);
+  return { ...d, limits: d.limits ?? {} };
 }
 
 /** GET /api/content: one page of summaries. Pass `next_cursor` back as `cursor` for the next page. */
 export async function list(baseUrl: string, apiKey: string, query: ListQuery = {}, opts: RequestOptions = {}): Promise<ListResult> {
-  const qs = new URLSearchParams();
-  for (const [k, v] of Object.entries(query)) if (v !== undefined && v !== null && v !== "") qs.set(k, String(v));
-  const q = qs.toString();
-  const res = await call(baseUrl, apiKey, { method: "GET", path: `/api/content${q ? `?${q}` : ""}` }, opts);
+  const res = await call(baseUrl, apiKey, { method: "GET", path: `/api/content${queryString(query)}` }, opts);
   return json<ListResult>(res);
 }
 
@@ -178,6 +252,12 @@ export async function remove(baseUrl: string, apiKey: string, id: string, opts: 
   return json<DeleteResult>(res);
 }
 
+/** GET /api/terms (feature `terms`): the tags and categories entries use, most used first. */
+export async function terms(baseUrl: string, apiKey: string, query: TermsQuery = {}, opts: RequestOptions = {}): Promise<TermsResult> {
+  const res = await call(baseUrl, apiKey, { method: "GET", path: `/api/terms${queryString(query)}` }, opts);
+  return json<TermsResult>(res);
+}
+
 /** POST /api/media: have the receiver fetch `{url}`, or upload `{filename, data, contentType}`. Images only. */
 export async function uploadMedia(
   baseUrl: string, apiKey: string, media: MediaInput, opts: RequestOptions = {},
@@ -195,6 +275,32 @@ export async function uploadMedia(
   }
   const res = await call(baseUrl, apiKey, { method: "POST", path: "/api/media", headers, body }, opts);
   return json<MediaResult>(res);
+}
+
+/** GET /api/media (feature `media_list`): one page of the media library, newest first. */
+export async function listMedia(
+  baseUrl: string, apiKey: string, query: MediaListQuery = {}, opts: RequestOptions = {},
+): Promise<MediaListResult> {
+  const res = await call(baseUrl, apiKey, { method: "GET", path: `/api/media${queryString(query)}` }, opts);
+  return json<MediaListResult>(res);
+}
+
+/** PATCH /api/media/{id} (feature `media_update`): set or clear (`null`) the alt text and title. Returns the item. */
+export async function updateMedia(
+  baseUrl: string, apiKey: string, id: string, patch: MediaPatch, opts: RequestOptions = {},
+): Promise<MediaItem> {
+  const res = await call(baseUrl, apiKey, {
+    method: "PATCH", path: mediaPath(id), headers: JSON_HEADERS, body: JSON.stringify(patch),
+  }, opts);
+  return json<MediaItem>(res);
+}
+
+/**
+ * Pure: is this entry scheduled, that is `published` with a `published_at` still in the future?
+ * (Reads report scheduled entries as `published`; SPEC "Scheduling".)
+ */
+export function isScheduled(entry: Pick<ContentSummary, "status" | "published_at">, now: Date = new Date()): boolean {
+  return entry.status === "published" && new Date(entry.published_at).getTime() > now.getTime();
 }
 
 const preview = (s: string) => (s.length > 60 ? `${s.slice(0, 60)}…` : s);

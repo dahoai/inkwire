@@ -1,8 +1,9 @@
 """Pydantic mirrors of the request schemas.
 
-- ``schema/inkwire-content.schema.json``  -> :class:`ContentInput` (create / upsert)
-- ``schema/inkwire-patch.schema.json``    -> :class:`PatchInput` (edit)
-- ``schema/inkwire-media.schema.json``    -> :class:`MediaUrlInput` (fetch-by-url media)
+- ``schema/inkwire-content.schema.json``     -> :class:`ContentInput` (create / upsert)
+- ``schema/inkwire-patch.schema.json``       -> :class:`PatchInput` (edit)
+- ``schema/inkwire-media.schema.json``       -> :class:`MediaUrlInput` (fetch-by-url media)
+- ``schema/inkwire-media-patch.schema.json`` -> :class:`MediaPatchInput` (media library edit)
 
 Bounds, patterns and nullability follow the JSON schemas. ``seo`` is stored as the
 overrides the caller sent; merging and SEO Profile 1 derivation live in the handler /
@@ -11,6 +12,7 @@ overrides the caller sent; merging and SEO Profile 1 derivation live in the hand
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime
 
@@ -45,6 +47,24 @@ def _http_url(value: str) -> str:
         _URL.validate_python(value)
     except ValidationError:  # pragma: no cover - pattern already rejects the common cases
         raise ValueError("must be a valid URL") from None
+    return value
+
+
+def _json_ld(value: str) -> str:
+    """One JSON object, or a non-empty array of objects, serialized (``seo.json_ld``)."""
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        raise ValueError("must be one JSON object, or an array of objects, as a string") from None
+    objects = parsed if isinstance(parsed, list) and parsed else [parsed]
+    if not all(isinstance(item, dict) for item in objects):
+        raise ValueError("must be one JSON object, or an array of objects, as a string")
+    return value
+
+
+def _term(value: str) -> str:
+    if not 1 <= len(value) <= 64:
+        raise ValueError("terms must be 1 to 64 characters each")
     return value
 
 
@@ -92,8 +112,11 @@ class SeoInput(BaseModel):
     description: str | None = Field(default=None, min_length=1, max_length=1024)
     image_url: str | None = None
     noindex: StrictBool = False
+    og_title: str | None = Field(default=None, min_length=1, max_length=512)
+    og_description: str | None = Field(default=None, min_length=1, max_length=1024)
+    json_ld: str | None = Field(default=None, min_length=2, max_length=20000)
 
-    @field_validator("title", "description", "image_url", mode="before")
+    @field_validator("title", "description", "image_url", "og_title", "og_description", "json_ld", mode="before")
     @classmethod
     def _not_null(cls, value):
         if value is None:
@@ -104,6 +127,11 @@ class SeoInput(BaseModel):
     @classmethod
     def _image_url(cls, value: str) -> str:
         return _http_url(value)
+
+    @field_validator("json_ld")
+    @classmethod
+    def _json_ld_value(cls, value: str) -> str:
+        return _json_ld(value)
 
 
 class ContentInput(BaseModel):
@@ -118,12 +146,34 @@ class ContentInput(BaseModel):
     slug: str | None = Field(default=None, max_length=255, pattern=SLUG_PATTERN)
     excerpt: str | None = Field(default=None, max_length=1024)
     tags: list[str] | None = Field(default=None, max_length=50)
+    categories: list[str] | None = Field(default=None, max_length=50)
     cover_image_url: str | None = None
+    cover_image_alt: str | None = Field(default=None, max_length=1024)
     canonical_url: str | None = None
     seo: SeoInput | None = None
     author: Author | None = None
     status: str = Field(default="draft", pattern="^(draft|published)$")
     published_at: str | None = None
+
+    @field_validator(
+        "slug",
+        "excerpt",
+        "tags",
+        "categories",
+        "cover_image_url",
+        "cover_image_alt",
+        "canonical_url",
+        "seo",
+        "author",
+        "published_at",
+        mode="before",
+    )
+    @classmethod
+    def _not_null(cls, value):
+        """Create has nothing to clear: an optional field is absent or has a value."""
+        if value is None:
+            raise ValueError("must not be null")
+        return value
 
     @field_validator("tags")
     @classmethod
@@ -134,12 +184,10 @@ class ContentInput(BaseModel):
                     raise ValueError("tags must be at most 64 characters each")
         return value
 
-    @field_validator("seo", mode="before")
+    @field_validator("categories")
     @classmethod
-    def _seo_not_null(cls, value):
-        if value is None:
-            raise ValueError("seo must be an object")
-        return value
+    def _category_length(cls, value):
+        return value if value is None else [_term(category) for category in value]
 
     @field_validator("cover_image_url", "canonical_url")
     @classmethod
@@ -160,13 +208,21 @@ class PatchSeo(BaseModel):
     description: str | None = Field(default=None, min_length=1, max_length=1024)
     image_url: str | None = None
     noindex: StrictBool | None = None
+    og_title: str | None = Field(default=None, min_length=1, max_length=512)
+    og_description: str | None = Field(default=None, min_length=1, max_length=1024)
+    json_ld: str | None = Field(default=None, min_length=2, max_length=20000)
 
-    @field_validator("title", "description", mode="before")
+    @field_validator("title", "description", "og_title", "og_description", mode="before")
     @classmethod
     def _not_null(cls, value):
         if value is None:
             raise ValueError("this SEO override cannot be null")
         return value
+
+    @field_validator("json_ld")
+    @classmethod
+    def _json_ld_value(cls, value: str | None) -> str | None:
+        return value if value is None else _json_ld(value)
 
     @field_validator("noindex", mode="before")
     @classmethod
@@ -192,7 +248,9 @@ class PatchInput(BaseModel):
     slug: str | None = Field(default=None, max_length=255, pattern=SLUG_PATTERN)
     excerpt: str | None = Field(default=None, max_length=1024)
     tags: list[str] | None = Field(default=None, max_length=50)
+    categories: list[str] | None = Field(default=None, max_length=50)
     cover_image_url: str | None = None
+    cover_image_alt: str | None = Field(default=None, max_length=1024)
     canonical_url: str | None = None
     seo: PatchSeo | None = None
     author: Author | None = None
@@ -207,6 +265,11 @@ class PatchInput(BaseModel):
                 if len(tag) > 64:
                     raise ValueError("tags must be at most 64 characters each")
         return value
+
+    @field_validator("categories")
+    @classmethod
+    def _category_length(cls, value):
+        return value if value is None else [_term(category) for category in value]
 
     @field_validator("cover_image_url", "canonical_url")
     @classmethod
@@ -241,6 +304,24 @@ class MediaUrlInput(BaseModel):
         return _http_url(value)
 
 
+class MediaPatchInput(BaseModel):
+    """``PATCH /api/media/{id}`` body: ``alt`` and/or ``title``; ``null`` clears one."""
+
+    model_config = ConfigDict(extra="forbid")
+    alt: str | None = Field(default=None, max_length=1024)
+    title: str | None = Field(default=None, max_length=512)
+
+    @model_validator(mode="after")
+    def _shape(self):
+        if not self.model_fields_set:
+            raise ValueError("the patch must carry at least one field")
+        return self
+
+    def changes(self) -> dict[str, str | None]:
+        """Only the fields the caller sent (a ``None`` value clears)."""
+        return {name: getattr(self, name) for name in ("alt", "title") if name in self.model_fields_set}
+
+
 def validation_message(exc: ValidationError) -> str:
     """One readable line for the ``invalid_payload`` message, e.g. ``title: Field required``."""
     error = exc.errors()[0]
@@ -251,6 +332,7 @@ def validation_message(exc: ValidationError) -> str:
 __all__ = [
     "Author",
     "ContentInput",
+    "MediaPatchInput",
     "MediaUrlInput",
     "PatchInput",
     "PatchSeo",

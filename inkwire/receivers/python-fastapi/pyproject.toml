@@ -1,7 +1,7 @@
 [project]
 name = "inkwire-receiver-core"
-version = "0.2.0"
-description = "Shared Python core for building an Inkwire blog-post receiver."
+version = "1.0.0"
+description = "The Inkwire receiver for Python: core, stores and a FastAPI app."
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "Isaac Gounton" }]
@@ -22,3 +22,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["inkwire_receiver*"]
+
+[tool.pytest.ini_options]
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]

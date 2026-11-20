@@ -1,11 +1,110 @@
+"""Inkwire client (protocol v1): publish, read, edit, delete, terms, media library, discovery.
+
+Every call returns what the receiver sent as plain dicts; the ``TypedDict`` classes below describe
+those shapes for type checkers.
+"""
+
 from __future__ import annotations
 
 import time
 import urllib.parse
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, List, Literal, Mapping, Optional, TypedDict
 import httpx
 
 _transport = None  # tests may inject an httpx.MockTransport
+
+
+class _Unset:
+    """Marks an argument that was not given, so ``None`` can mean "clear it"."""
+
+    def __repr__(self) -> str:
+        return "UNSET"
+
+    def __bool__(self) -> bool:
+        return False
+
+
+UNSET: Any = _Unset()
+
+
+class SeoOverrides(TypedDict, total=False):
+    """SEO overrides on publish; ``json_ld`` is one JSON object (or array of objects) as a string."""
+
+    title: str
+    description: str
+    image_url: str
+    noindex: bool
+    og_title: str
+    og_description: str
+    json_ld: str
+
+
+class EffectiveSeo(TypedDict, total=False):
+    """The ``seo`` of a read entry: overrides applied over the derived defaults. ``json_ld`` only when set."""
+
+    title: str
+    description: str
+    image_url: str
+    noindex: bool
+    og_title: str
+    og_description: str
+    json_ld: str
+
+
+class ContentSummary(TypedDict, total=False):
+    id: str
+    external_id: Optional[str]
+    kind: str
+    title: str
+    slug: str
+    url: str
+    status: Literal["draft", "published"]
+    excerpt: Optional[str]
+    tags: List[str]
+    categories: List[str]
+    published_at: str
+    updated_at: str
+
+
+class Content(ContentSummary, total=False):
+    markdown: str
+    cover_image_url: Optional[str]
+    cover_image_alt: Optional[str]
+    canonical_url: Optional[str]
+    author: Optional[dict]
+    seo: EffectiveSeo
+
+
+class Term(TypedDict):
+    """A tag or category some entry carries; ``count`` includes drafts."""
+
+    kind: Literal["tag", "category"]
+    name: str
+    slug: str
+    count: int
+
+
+class TermsResult(TypedDict):
+    items: List[Term]
+
+
+class _MediaRequired(TypedDict):
+    id: str
+    url: str
+    mime_type: str
+    created_at: str
+
+
+class MediaItem(_MediaRequired, total=False):
+    """An image in the media library (also what an upload answers with)."""
+
+    alt: str
+    title: str
+
+
+class MediaListResult(TypedDict):
+    items: List[MediaItem]
+    next_cursor: Optional[str]
 
 DEFAULT_STATUS_CODES = {
     400: "invalid_payload",
@@ -105,9 +204,35 @@ def capabilities(base_url: str, api_key: str, retries: int = 3) -> dict:
         raise
 
 
-def list(base_url: str, api_key: str, retries: int = 3, **filters) -> dict:
+def list(
+    base_url: str,
+    api_key: str,
+    retries: int = 3,
+    *,
+    status: str | None = None,
+    kind: str | None = None,
+    tag: str | None = None,
+    category: str | None = None,
+    search: str | None = None,
+    external_id: str | None = None,
+    slug: str | None = None,
+    limit: int | None = None,
+    cursor: str | None = None,
+) -> dict:
+    """GET /api/content: one page of summaries, newest first; pass ``next_cursor`` back as ``cursor``."""
     url = base_url.rstrip("/") + "/api/content"
     headers = {"authorization": f"Bearer {api_key}"}
+    filters = {
+        "status": status,
+        "kind": kind,
+        "tag": tag,
+        "category": category,
+        "search": search,
+        "external_id": external_id,
+        "slug": slug,
+        "limit": limit,
+        "cursor": cursor,
+    }
     params = {k: v for k, v in filters.items() if v is not None}
     res = _call("GET", url, headers=headers, params=params, retries=retries)
     return res.json()
@@ -157,6 +282,66 @@ def remove(
     return res.json()
 
 
+def terms(
+    base_url: str,
+    api_key: str,
+    kind: Literal["tag", "category"] | None = None,
+    search: str | None = None,
+    limit: int | None = None,
+    retries: int = 3,
+) -> TermsResult:
+    """GET /api/terms (feature ``terms``): the tags and categories entries use, most used first."""
+    url = base_url.rstrip("/") + "/api/terms"
+    headers = {"authorization": f"Bearer {api_key}"}
+    filters = {"kind": kind, "search": search, "limit": limit}
+    params = {k: v for k, v in filters.items() if v is not None}
+    res = _call("GET", url, headers=headers, params=params, retries=retries)
+    return res.json()
+
+
+def list_media(
+    base_url: str,
+    api_key: str,
+    search: str | None = None,
+    limit: int | None = None,
+    cursor: str | None = None,
+    retries: int = 3,
+) -> MediaListResult:
+    """GET /api/media (feature ``media_list``): one page of the media library, newest first."""
+    url = base_url.rstrip("/") + "/api/media"
+    headers = {"authorization": f"Bearer {api_key}"}
+    filters = {"search": search, "limit": limit, "cursor": cursor}
+    params = {k: v for k, v in filters.items() if v is not None}
+    res = _call("GET", url, headers=headers, params=params, retries=retries)
+    return res.json()
+
+
+def update_media(
+    base_url: str,
+    api_key: str,
+    id: str,
+    *,
+    alt: str | None = UNSET,
+    title: str | None = UNSET,
+    retries: int = 3,
+) -> MediaItem:
+    """PATCH /api/media/{id} (feature ``media_update``): set ``alt`` and/or ``title``.
+
+    An argument left out is not sent; ``None`` is sent as ``null`` and clears the field.
+    """
+    patch = {name: value for name, value in (("alt", alt), ("title", title)) if value is not UNSET}
+    if not patch:
+        raise InkwireClientError("invalid_payload", "update_media requires 'alt' and/or 'title'", 0)
+    quoted_id = urllib.parse.quote(id, safe="")
+    url = f"{base_url.rstrip('/')}/api/media/{quoted_id}"
+    headers = {
+        "content-type": "application/json",
+        "authorization": f"Bearer {api_key}",
+    }
+    res = _call("PATCH", url, headers=headers, json=patch, retries=retries)
+    return res.json()
+
+
 def upload_media(
     base_url: str,
     api_key: str,
@@ -165,7 +350,8 @@ def upload_media(
     data: bytes | tuple[bytes, str, str] | None = None,
     alt: str | None = None,
     retries: int = 3,
-) -> dict:
+) -> MediaItem:
+    """POST /api/media (feature ``media``): have the receiver fetch ``url`` or upload ``data``. Images only."""
     endpoint = base_url.rstrip("/") + "/api/media"
     headers = {"authorization": f"Bearer {api_key}"}
     if url is not None:
@@ -235,6 +421,18 @@ __all__ = [
     "get",
     "update",
     "remove",
+    "terms",
+    "list_media",
+    "update_media",
     "upload_media",
     "edits",
+    "UNSET",
+    "SeoOverrides",
+    "EffectiveSeo",
+    "ContentSummary",
+    "Content",
+    "Term",
+    "TermsResult",
+    "MediaItem",
+    "MediaListResult",
 ]

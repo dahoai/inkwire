@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  InkwireClientError, capabilities, edits, get, list, publish, remove, update, uploadMedia,
+  InkwireClientError, capabilities, edits, get, isScheduled, list, listMedia, publish, remove, terms, update, updateMedia, uploadMedia,
 } from "../index";
 
 interface Seen { method: string; url: string; headers: IncomingMessage["headers"]; body: Buffer }
@@ -46,6 +46,15 @@ describe("publish", () => {
     expect(seen[0]!.headers["content-type"]).toBe("application/json");
     expect(sent()).toMatchObject({ external_id: "e1", kind: "page" });
   });
+  it("sends categories, cover_image_alt and the new SEO overrides unchanged", async () => {
+    replies = [{ json: { id: "p", external_id: "e1", url: "u", slug: "s", kind: "post", status: "draft", created: true } }];
+    const payload = {
+      external_id: "e1", title: "T", markdown: "x", categories: ["Guides", "News"], cover_image_alt: "A red bicycle",
+      seo: { og_title: "Card", og_description: "Card text", json_ld: '{"@context":"https://schema.org"}' },
+    };
+    await publish(base, "k", payload);
+    expect(sent()).toEqual(payload);
+  });
   it("surfaces an explicit slug conflict as code conflict (409), not retried", async () => {
     replies = [{ status: 409, json: { error: { code: "conflict", message: "slug taken" } } }];
     await expect(publish(base, "k", { external_id: "e", title: "T", markdown: "x", slug: "s" }))
@@ -67,9 +76,17 @@ describe("capabilities", () => {
     expect(await capabilities(base, "k")).toEqual({ features: ["upsert"], kinds: ["post"], limits: {} });
     expect(seen).toHaveLength(1);
   });
-  it("fills missing fields with the fallback values", async () => {
-    replies = [{ json: { inkwire: 1, features: ["upsert", "media"] } }];
-    expect(await capabilities(base, "k")).toMatchObject({ features: ["upsert", "media"], kinds: ["post"], limits: {} });
+  it("limits are optional: absent reads as no limits, everything else is passed through", async () => {
+    replies = [{ json: { inkwire: 1, features: ["upsert", "media"], kinds: ["post"] } }];
+    expect(await capabilities(base, "k")).toEqual({ inkwire: 1, features: ["upsert", "media"], kinds: ["post"], limits: {} });
+  });
+  it("reads site.description / site.language and the new feature names", async () => {
+    const features = ["upsert", "list", "get", "update", "delete", "terms", "schedule", "media", "media_list", "media_update"];
+    replies = [{ json: { inkwire: 1, site: { name: "A", url: "https://a.test", description: "A blog", language: "fr-CA" }, features, kinds: ["post"], limits: { media_bytes: 5 } } }];
+    const c = await capabilities(base, "k");
+    expect(c.site).toEqual({ name: "A", url: "https://a.test", description: "A blog", language: "fr-CA" });
+    expect(c.features).toEqual(features);
+    expect(c.features.includes("media_update")).toBe(true);
   });
   it("other failures still throw (401)", async () => {
     replies = [{ status: 401, json: { error: { code: "unauthorized", message: "bad key" } } }];
@@ -81,13 +98,13 @@ describe("list", () => {
   it("encodes every query field, skips undefined, and returns items + next_cursor", async () => {
     replies = [{ json: { items: [{ id: "a" }], next_cursor: "c2" } }];
     const r = await list(base, "k", {
-      status: "draft", kind: "page", tag: "a b", search: "x&y=z", external_id: "e/1", slug: "s", limit: 5, cursor: "abc+/=",
+      status: "draft", kind: "page", tag: "a b", category: "Guides & Tips", search: "x&y=z", external_id: "e/1", slug: "s", limit: 5, cursor: "abc+/=",
     });
     expect(r).toEqual({ items: [{ id: "a" }], next_cursor: "c2" });
     const u = new URL(seen[0]!.url, "http://x");
     expect(u.pathname).toBe("/api/content");
     expect(Object.fromEntries(u.searchParams)).toEqual({
-      status: "draft", kind: "page", tag: "a b", search: "x&y=z", external_id: "e/1", slug: "s", limit: "5", cursor: "abc+/=",
+      status: "draft", kind: "page", tag: "a b", category: "Guides & Tips", search: "x&y=z", external_id: "e/1", slug: "s", limit: "5", cursor: "abc+/=",
     });
   });
   it("sends no query string for an empty query, and drops undefined/empty values", async () => {
@@ -95,6 +112,12 @@ describe("list", () => {
     await list(base, "k");
     await list(base, "k", { status: undefined, search: "" });
     expect(seen.map((s) => s.url)).toEqual(["/api/content", "/api/content"]);
+  });
+  it("filters by category and returns categories in the summaries", async () => {
+    replies = [{ json: { items: [{ id: "a", categories: ["Guides"] }], next_cursor: null } }];
+    const r = await list(base, "k", { category: "Guides" });
+    expect(seen[0]!.url).toBe("/api/content?category=Guides");
+    expect(r.items[0]!.categories).toEqual(["Guides"]);
   });
   it("pages forward with the cursor", async () => {
     replies = [{ json: { items: [{ id: "a" }], next_cursor: "n1" } }, { json: { items: [{ id: "b" }], next_cursor: null } }];
@@ -112,6 +135,14 @@ describe("get", () => {
     expect(r.etag).toBe('"abc-1"');
     expect(r.content).toMatchObject({ id: "post.hello", markdown: "# Hello\n\nbody", seo: { noindex: false } });
     expect(seen[0]).toMatchObject({ method: "GET", url: "/api/content/post.hello" });
+  });
+  it("returns cover_image_alt and the effective og_title / og_description / json_ld", async () => {
+    const seo = { title: "Hello", description: "Hello", noindex: false, og_title: "Card", og_description: "Card text", json_ld: '{"@type":"FAQPage"}' };
+    replies = [{ json: entry({ categories: ["Guides"], cover_image_alt: "A red bicycle", seo }) }];
+    const { content } = await get(base, "k", "post.hello");
+    expect(content.categories).toEqual(["Guides"]);
+    expect(content.cover_image_alt).toBe("A red bicycle");
+    expect(content.seo).toEqual(seo);
   });
   it("url-encodes the id", async () => {
     replies = [{ json: entry() }];
@@ -136,6 +167,17 @@ describe("update", () => {
     expect(seen[0]!.headers["if-match"]).toBe('"abc-1"');
     expect(seen[0]!.headers["content-type"]).toBe("application/json");
     expect(sent()).toEqual({ title: "After", excerpt: null, seo: { image_url: null, noindex: true } });
+  });
+  it("PATCHes the new fields, keeping nulls (categories, cover_image_alt, seo.json_ld)", async () => {
+    replies = [{ json: entry() }];
+    const patch = {
+      categories: ["Guides"], cover_image_alt: null,
+      seo: { og_title: "Card", og_description: "Card text", json_ld: null },
+    };
+    await update(base, "k", "post.hello", patch);
+    expect(sent()).toEqual(patch);
+    await update(base, "k", "post.hello", { categories: null, cover_image_alt: "Alt", seo: { json_ld: '{"@type":"FAQPage"}' } });
+    expect(sent(1)).toEqual({ categories: null, cover_image_alt: "Alt", seo: { json_ld: '{"@type":"FAQPage"}' } });
   });
   it("sends no If-Match when none is given", async () => {
     replies = [{ json: entry() }];
@@ -190,6 +232,116 @@ describe("remove", () => {
   });
 });
 
+describe("terms", () => {
+  it("GETs /api/terms with an encoded query and returns the items", async () => {
+    const items = [{ kind: "tag", name: "SEO", slug: "seo", count: 12 }, { kind: "category", name: "Guides & Tips", slug: "guides-tips", count: 3 }];
+    replies = [{ json: { items } }];
+    const r = await terms(base, "k", { kind: "tag", search: "s&e o", limit: 50 });
+    expect(r).toEqual({ items });
+    expect(seen[0]).toMatchObject({ method: "GET" });
+    expect(seen[0]!.headers.authorization).toBe("Bearer k");
+    const u = new URL(seen[0]!.url, "http://x");
+    expect(u.pathname).toBe("/api/terms");
+    expect(Object.fromEntries(u.searchParams)).toEqual({ kind: "tag", search: "s&e o", limit: "50" });
+  });
+  it("sends no query string without a query, and drops undefined/empty values", async () => {
+    replies = [{ json: { items: [] } }];
+    await terms(base, "k");
+    await terms(base, "k", { kind: undefined, search: "" });
+    await terms(base, "k", { kind: "category" });
+    expect(seen.map((s) => s.url)).toEqual(["/api/terms", "/api/terms", "/api/terms?kind=category"]);
+  });
+  it("maps errors: 400 bad kind, 401, 403 not retried; 503 retried", async () => {
+    for (const [status, code] of [[400, "invalid_payload"], [401, "unauthorized"], [403, "forbidden"]] as const) {
+      seen.length = 0;
+      replies = [{ status, json: { error: { code, message: "no" } } }];
+      await expect(terms(base, "k", {}, { retries: 3 })).rejects.toMatchObject({ code, httpStatus: status });
+      expect(seen).toHaveLength(1);
+    }
+    seen.length = 0;
+    replies = [{ status: 503, json: {} }, { json: { items: [] } }];
+    expect(await terms(base, "k", {}, { retries: 2 })).toEqual({ items: [] });
+    expect(seen).toHaveLength(2);
+  });
+});
+
+describe("listMedia", () => {
+  const item = { id: "m1", url: "https://site.test/u/a.png", alt: "A", title: "T", mime_type: "image/png", created_at: "2026-01-01T00:00:00.000Z" };
+  it("GETs /api/media with an encoded query and returns items + next_cursor", async () => {
+    replies = [{ json: { items: [item], next_cursor: "c2" } }];
+    const r = await listMedia(base, "k", { search: "red bike&x", limit: 10, cursor: "abc+/=" });
+    expect(r).toEqual({ items: [item], next_cursor: "c2" });
+    expect(seen[0]).toMatchObject({ method: "GET" });
+    expect(seen[0]!.headers.authorization).toBe("Bearer k");
+    const u = new URL(seen[0]!.url, "http://x");
+    expect(u.pathname).toBe("/api/media");
+    expect(Object.fromEntries(u.searchParams)).toEqual({ search: "red bike&x", limit: "10", cursor: "abc+/=" });
+  });
+  it("no query string by default; pages forward with the cursor", async () => {
+    replies = [{ json: { items: [item], next_cursor: "n1" } }, { json: { items: [], next_cursor: null } }];
+    const p1 = await listMedia(base, "k");
+    const p2 = await listMedia(base, "k", { limit: 1, cursor: p1.next_cursor! });
+    expect(p2.next_cursor).toBeNull();
+    expect(seen.map((s) => s.url)).toEqual(["/api/media", "/api/media?limit=1&cursor=n1"]);
+  });
+  it("maps errors: 400 bad limit/cursor, 403, 404 not retried", async () => {
+    for (const [status, code] of [[400, "invalid_payload"], [403, "forbidden"], [404, "not_found"]] as const) {
+      seen.length = 0;
+      replies = [{ status, json: { error: { code, message: "no" } } }];
+      await expect(listMedia(base, "k", { limit: 0 })).rejects.toMatchObject({ code, httpStatus: status });
+      expect(seen).toHaveLength(1);
+    }
+  });
+});
+
+describe("updateMedia", () => {
+  it("PATCHes /api/media/{id} with the body (nulls kept) and returns the item", async () => {
+    const item = { id: "m1", url: "u", title: "New", mime_type: "image/png", created_at: "2026-01-01T00:00:00.000Z" };
+    replies = [{ json: item }];
+    const r = await updateMedia(base, "k", "m1", { alt: null, title: "New" });
+    expect(r).toEqual(item);
+    expect(seen[0]).toMatchObject({ method: "PATCH", url: "/api/media/m1" });
+    expect(seen[0]!.headers.authorization).toBe("Bearer k");
+    expect(seen[0]!.headers["content-type"]).toBe("application/json");
+    expect(sent()).toEqual({ alt: null, title: "New" });
+  });
+  it("url-encodes the id", async () => {
+    replies = [{ json: { id: "x", url: "u", mime_type: "image/png", created_at: "t" } }];
+    await updateMedia(base, "k", "a/b c?d", { alt: "x" });
+    expect(seen[0]!.url).toBe("/api/media/a%2Fb%20c%3Fd");
+  });
+  it("maps errors: 404 unknown id, 400 empty body, 403 read-only, not retried", async () => {
+    for (const [status, code] of [[404, "not_found"], [400, "invalid_payload"], [403, "forbidden"]] as const) {
+      seen.length = 0;
+      replies = [{ status, json: { error: { code, message: "no" } } }];
+      await expect(updateMedia(base, "k", "m", {})).rejects.toMatchObject({ code, httpStatus: status });
+      expect(seen).toHaveLength(1);
+    }
+  });
+  it("retries a 500 and then succeeds", async () => {
+    replies = [{ status: 500, json: {} }, { json: { id: "m", url: "u", mime_type: "image/png", created_at: "t" } }];
+    expect((await updateMedia(base, "k", "m", { alt: "a" }, { retries: 2 })).id).toBe("m");
+    expect(seen).toHaveLength(2);
+  });
+});
+
+describe("isScheduled", () => {
+  const now = new Date("2026-06-01T00:00:00Z");
+  it("is true only for a published entry dated after now", () => {
+    expect(isScheduled({ status: "published", published_at: "2026-06-01T00:00:01Z" }, now)).toBe(true);
+    expect(isScheduled({ status: "published", published_at: "2026-06-01T00:00:00Z" }, now)).toBe(false);
+    expect(isScheduled({ status: "published", published_at: "2026-01-01T00:00:00Z" }, now)).toBe(false);
+    expect(isScheduled({ status: "draft", published_at: "2027-01-01T00:00:00Z" }, now)).toBe(false);
+  });
+  it("defaults now to the current time and accepts a full entry", () => {
+    const future = new Date(Date.now() + 86_400_000).toISOString();
+    expect(isScheduled({ status: "published", published_at: future })).toBe(true);
+    expect(isScheduled(entry({ published_at: future }) as any)).toBe(true);
+    expect(isScheduled(entry() as any)).toBe(false);
+    expect(seen).toHaveLength(0);
+  });
+});
+
 describe("uploadMedia", () => {
   it("JSON variant: url + alt", async () => {
     replies = [{ json: { id: "m1", url: "https://site.test/m/x.png", alt: "An image" } }];
@@ -198,6 +350,13 @@ describe("uploadMedia", () => {
     expect(seen[0]).toMatchObject({ method: "POST", url: "/api/media" });
     expect(seen[0]!.headers["content-type"]).toBe("application/json");
     expect(sent()).toEqual({ url: "https://img.test/x.png", alt: "An image" });
+  });
+  it("returns mime_type, created_at and title from the upload response", async () => {
+    const item = { id: "m1", url: "u", alt: "a", title: "t", mime_type: "image/jpeg", created_at: "2026-07-22T04:00:00.000Z" };
+    replies = [{ json: item }];
+    const r = await uploadMedia(base, "k", { url: "https://img.test/x.jpg" });
+    expect(r).toEqual(item);
+    expect([r.mime_type, r.created_at, r.title]).toEqual(["image/jpeg", "2026-07-22T04:00:00.000Z", "t"]);
   });
   it("JSON variant without alt sends no alt", async () => {
     replies = [{ json: { id: "m1", url: "u" } }];
@@ -309,10 +468,14 @@ describe("retries", () => {
     await update("https://s.test", "k", "i", { title: "T" }, { fetch: custom });
     await remove("https://s.test", "k", "i", { fetch: custom });
     await uploadMedia("https://s.test", "k", { url: "https://i.test/a.png" }, { fetch: custom });
+    await terms("https://s.test", "k", {}, { fetch: custom });
+    await listMedia("https://s.test", "k", {}, { fetch: custom });
+    await updateMedia("https://s.test", "k", "m", { alt: "a" }, { fetch: custom });
     expect(urls).toEqual([
       "POST https://s.test/api/content", "GET https://s.test/api/inkwire", "GET https://s.test/api/content",
       "GET https://s.test/api/content/i", "PATCH https://s.test/api/content/i", "DELETE https://s.test/api/content/i",
-      "POST https://s.test/api/media",
+      "POST https://s.test/api/media", "GET https://s.test/api/terms", "GET https://s.test/api/media",
+      "PATCH https://s.test/api/media/m",
     ]);
     expect(seen).toHaveLength(0);
   });

@@ -9,6 +9,8 @@ Environment::
     INKWIRE_MEDIA_URL_BASE=/inkwire-media      # public base for uploaded files
     INKWIRE_SITE_NAME=Acme                     # discovery
     INKWIRE_SITE_URL=https://acme.com          # discovery + default entry URLs
+    INKWIRE_SITE_DESCRIPTION="Acme's blog"     # discovery (optional)
+    INKWIRE_SITE_LANGUAGE=en                   # discovery, a BCP 47 tag (optional)
     INKWIRE_URL_TEMPLATE={site}/blog/{slug}    # entry URL; {site} {kind} {slug} (default /blog/<slug> for posts)
     INKWIRE_MARKDOWN_LIMIT_BYTES=1000000       # default 1 MB
     INKWIRE_MEDIA_LIMIT_BYTES=10000000         # default 10 MB
@@ -30,19 +32,19 @@ from inkwire_receiver import (
     Limits,
     MemoryStore,
     Site,
-
     guarded_fetcher,
     handle_delete,
     handle_discovery,
     handle_get,
     handle_list,
     handle_media,
+    handle_media_list,
+    handle_media_update,
     handle_patch,
+    handle_terms,
     handle_upsert,
     parse_api_keys,
 )
-
-FEATURES = ["upsert", "list", "get", "update", "delete", "media"]
 
 
 def _env_int(name: str, default: int) -> int:
@@ -118,10 +120,14 @@ def create_app(
 
     if config is None:
         config = InkwireConfig(
-            site=Site(name=os.environ.get("INKWIRE_SITE_NAME") or None, url=os.environ.get("INKWIRE_SITE_URL") or None),
+            site=Site(
+                name=os.environ.get("INKWIRE_SITE_NAME") or None,
+                url=os.environ.get("INKWIRE_SITE_URL") or None,
+                description=os.environ.get("INKWIRE_SITE_DESCRIPTION") or None,
+                language=os.environ.get("INKWIRE_SITE_LANGUAGE") or None,
+            ),
             kinds=_env_kinds(),
             limits=Limits(markdown_bytes=markdown_limit, media_bytes=media_limit),
-            features=list(FEATURES),
             url_for=_env_url_for(os.environ.get("INKWIRE_SITE_URL")),
         )
     if store is None:
@@ -185,6 +191,31 @@ def create_app(
         )
         return _json(status, headers, body)
 
+    @app.get("/api/terms")
+    async def terms(request: Request):
+        status, headers, body = await handle_terms(
+            auth_header=auth_header(request), query=request.query_params, keys=keys, store=store
+        )
+        return _json(status, headers, body)
+
+    @app.get("/api/media")
+    async def list_media(request: Request):
+        status, headers, body = await handle_media_list(
+            auth_header=auth_header(request), query=request.query_params, keys=keys, store=store
+        )
+        return _json(status, headers, body)
+
+    @app.patch("/api/media/{media_id}")
+    async def update_media(media_id: str, request: Request):
+        status, headers, body = await handle_media_update(
+            auth_header=auth_header(request),
+            id=media_id,
+            raw_body=await request.body(),
+            keys=keys,
+            store=store,
+        )
+        return _json(status, headers, body)
+
     @app.post("/api/media")
     async def media(request: Request):
         content_type = request.headers.get("content-type", "")
@@ -219,7 +250,7 @@ def create_app(
     @app.get("/api/inkwire")
     async def discovery(request: Request):
         status, headers, body = await handle_discovery(
-            auth_header=auth_header(request), keys=keys, config=config
+            auth_header=auth_header(request), keys=keys, store=store, config=config
         )
         return _json(status, headers, body)
 
@@ -241,4 +272,4 @@ def create_app(
     return app
 
 
-__all__ = ["FEATURES", "create_app"]
+__all__ = ["create_app"]
