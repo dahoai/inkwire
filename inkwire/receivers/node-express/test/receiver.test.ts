@@ -138,6 +138,22 @@ describe("environment", () => {
     assert.equal(typeof on.store.saveMedia, "function");
   });
 
+  it("INKWIRE_STORE chooses the store: memory has no media, github needs its settings, junk is refused", async () => {
+    const mem = buildReceiver({ INKWIRE_API_KEYS: "k", INKWIRE_STORE: "memory" });
+    assert.equal(mem.config.features?.includes("media"), false);
+    assert.equal(mem.store.saveMedia, undefined);
+    assert.equal(mem.mediaDir, null);
+    assert.throws(() => buildReceiver({ INKWIRE_API_KEYS: "k", INKWIRE_STORE: "github" }), /needs INKWIRE_GITHUB_REPO/);
+    assert.throws(() => buildReceiver({ INKWIRE_API_KEYS: "k", INKWIRE_STORE: "redis" }), /must be file, memory or github/);
+    const file = buildReceiver({ INKWIRE_API_KEYS: "k", INKWIRE_STORE: "file", INKWIRE_GITHUB_REPO: "o/r", INKWIRE_GITHUB_TOKEN: "t" });
+    assert.ok(file.mediaDir, "an explicit file store wins over github settings");
+    const { base } = await boot({ INKWIRE_STORE: "memory" });
+    const r = await post(`${base}/api/content`, entry("m"));
+    assert.equal(r.status, 200);
+    const up = await fetch(`${base}/api/media`, { method: "POST", headers: KEY, body: new FormData() });
+    assert.equal(up.status, 404);
+  });
+
   it("falls back to sane limits for junk numbers and defaults the kinds", () => {
     const r = buildReceiver({ INKWIRE_API_KEYS: "k", INKWIRE_MEDIA_LIMIT_BYTES: "abc", INKWIRE_MARKDOWN_LIMIT_BYTES: "-5" });
     assert.deepEqual(r.config.limits, { markdown_bytes: 1_000_000, media_bytes: 10_000_000 });

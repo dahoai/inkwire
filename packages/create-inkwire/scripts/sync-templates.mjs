@@ -60,6 +60,23 @@ const js = ts.transpileModule(express, {
 }).outputText;
 write(path.join(OUT, "express/inkwire-router.mjs"), BANNER + js);
 
+// 4. INSTALL.md embeds the two verified page examples verbatim, so the docs cannot drift from them.
+const INSTALL = path.resolve(PKG, "../../INSTALL.md");
+if (existsSync(INSTALL)) {
+  const doc = readFileSync(INSTALL, "utf8");
+  const next = doc.replace(
+    /(<!-- inkwire:example (\S+) -->\n)```(\w+)\n[\s\S]*?```\n(<!-- \/inkwire:example -->)/g,
+    (_, open, rel, lang, close) => {
+      const source = readFileSync(path.resolve(PKG, "../..", rel), "utf8");
+      return `${open}\`\`\`${lang}\n${source.replace(/\n*$/, "\n")}\`\`\`\n${close}`;
+    },
+  );
+  if (next !== doc) {
+    if (check) stale.push("INSTALL.md (embedded examples)");
+    else writeFileSync(INSTALL, next);
+  }
+}
+
 if (!check) {
   // drop template files the receivers no longer have
   const want = new Set([...walk(NEXT_APP).map((f) => path.join(OUT, "next-app", path.relative(NEXT_APP, f))), path.join(OUT, "express/inkwire-router.ts"), path.join(OUT, "express/inkwire-router.mjs")]);

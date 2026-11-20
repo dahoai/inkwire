@@ -11,7 +11,7 @@ import http from "node:http";
 import https from "node:https";
 import net from "node:net";
 import path from "node:path";
-import { FileStore, GitHubStore, InkwireError, parseApiKeys, } from "inkwire-receiver-core";
+import { FileStore, GitHubStore, InkwireError, MemoryStore, parseApiKeys, } from "inkwire-receiver-core";
 // --- Fetching an image by URL, for POST /api/media {url}. Public http(s) hosts only: every address the
 // name resolves to must be public, the connection is pinned to the address we checked (no DNS
 // rebinding between check and connect), redirects are re-checked, and the size is capped as it streams.
@@ -208,17 +208,25 @@ export function buildReceiver(env = process.env) {
     const mediaBaseRaw = env.INKWIRE_MEDIA_URL_BASE ?? "/inkwire-media";
     const mediaIsAbsolute = /^https?:\/\//.test(mediaBaseRaw);
     const mediaUrlBase = (mediaIsAbsolute ? mediaBaseRaw : siteUrl + (mediaBaseRaw.startsWith("/") ? "" : "/") + mediaBaseRaw).replace(/\/+$/, "");
-    const template = env.INKWIRE_URL_TEMPLATE; // e.g. https://site.com/blog/{slug}
-    const urlFor = (e) => template ? template.replace("{kind}", e.kind).replace("{slug}", e.slug) : `${siteUrl}/${e.kind}/${e.slug}`;
+    const template = env.INKWIRE_URL_TEMPLATE; // e.g. {site}/blog/{slug}  or  https://site.com/{kind}/{slug}
+    const urlFor = (e) => template ? template.replace("{site}", siteUrl).replace("{kind}", e.kind).replace("{slug}", e.slug) : `${siteUrl}/${e.kind}/${e.slug}`;
     const repo = env.INKWIRE_GITHUB_REPO;
     const token = env.INKWIRE_GITHUB_TOKEN;
     if (Boolean(repo) !== Boolean(token)) {
         throw new Error("INKWIRE_GITHUB_REPO (owner/name) and INKWIRE_GITHUB_TOKEN must be set together");
     }
+    // INKWIRE_STORE picks the store; unset means GitHub when the repo and token are set, else files.
+    const kind = (env.INKWIRE_STORE ?? (repo ? "github" : "file")).toLowerCase();
+    if (kind !== "file" && kind !== "memory" && kind !== "github") {
+        throw new Error(`INKWIRE_STORE must be file, memory or github (got "${env.INKWIRE_STORE}")`);
+    }
+    if (kind === "github" && !repo)
+        throw new Error("INKWIRE_STORE=github needs INKWIRE_GITHUB_REPO and INKWIRE_GITHUB_TOKEN");
     let store;
     let mediaDir = null;
     let media = true;
-    if (repo && token) {
+    const withoutMedia = (s) => new Proxy(s, { get: (t, p) => (p === "saveMedia" ? undefined : Reflect.get(t, p)) });
+    if (kind === "github") {
         const [owner, name] = repo.split("/");
         if (!owner || !name)
             throw new Error("INKWIRE_GITHUB_REPO must look like owner/name");
@@ -227,14 +235,19 @@ export function buildReceiver(env = process.env) {
             repo: name,
             branch: env.INKWIRE_GITHUB_BRANCH ?? "main",
             dir: env.INKWIRE_GITHUB_DIR ?? "content",
-            token,
+            token: token,
             mediaUrlBase,
             urlFor,
         });
         // Uploads are committed to <dir>/media; they are only useful when that folder is served at a
         // public address, which this receiver cannot know unless INKWIRE_MEDIA_URL_BASE is absolute.
         media = mediaIsAbsolute;
-        store = media ? github : new Proxy(github, { get: (t, p) => (p === "saveMedia" ? undefined : Reflect.get(t, p)) });
+        store = media ? github : withoutMedia(github);
+    }
+    else if (kind === "memory") {
+        // Nothing survives a restart, and there is nowhere to serve uploads from.
+        media = false;
+        store = withoutMedia(new MemoryStore({ urlFor }));
     }
     else {
         const root = path.resolve(env.INKWIRE_ROOT ?? "./content");

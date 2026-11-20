@@ -10,11 +10,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFil
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runConformance } from "../../../inkwire/receivers/node-express/test/harness.mjs";
+import { freePort, runConformance } from "../../../inkwire/receivers/node-express/test/harness.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BIN = path.resolve(HERE, "../bin.js");
 const CORE = path.resolve(HERE, "../../../inkwire/receivers/core-ts");
+const RECEIVERS = path.resolve(HERE, "../../../inkwire/receivers");
+const SEO_RUNNER = path.resolve(HERE, "../../../inkwire/conformance/seo-runner.mjs");
+const example = (rel) => readFileSync(path.join(RECEIVERS, rel), "utf8");
 if (!existsSync(path.join(CORE, "dist/index.js"))) {
   console.error(`build the core first: (cd ${CORE} && npm install && npm run build)`);
   process.exit(2);
@@ -28,7 +31,7 @@ const PNG = Buffer.from(
 const put = (dir, files) => {
   for (const [name, content] of Object.entries(files)) {
     mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
-    writeFileSync(path.join(dir, name), typeof content === "string" ? content : JSON.stringify(content, null, 2) + "\n");
+    writeFileSync(path.join(dir, name), typeof content === "function" ? content() : typeof content === "string" ? content : JSON.stringify(content, null, 2) + "\n");
   }
 };
 
@@ -39,7 +42,9 @@ const FIXTURES = {
   next: {
     framework: "next",
     envFile: ".env.local",
+    seo: true,
     files: {
+      "app/blog/[slug]/page.tsx": () => example("nextjs/examples/blog/[slug]/page.tsx"),
       "package.json": {
         name: "fixture-next", private: true,
         dependencies: { next: "^15.0.0", react: "^19.0.0", "react-dom": "^19.0.0" },
@@ -57,9 +62,11 @@ const FIXTURES = {
   "express-esm": {
     framework: "express",
     envFile: ".env",
+    seo: true,
     files: {
       "package.json": { name: "fixture-express-esm", private: true, type: "module", ...EXPRESS_DEPS },
-      "server.mjs": 'import express from "express";\nimport { createInkwireRouter } from "./inkwire-router.mjs";\nconst app = express();\napp.use(createInkwireRouter());\napp.listen(Number(process.env.PORT));\n',
+      "blog.mjs": () => example("node-express/examples/blog.mjs"),
+      "server.mjs": 'import express from "express";\nimport { createInkwireRouter } from "./inkwire-router.mjs";\nimport { mountBlog } from "./blog.mjs";\nconst app = express();\napp.use(createInkwireRouter());\nmountBlog(app);\napp.listen(Number(process.env.PORT));\n',
     },
     start: { command: process.execPath, args: ["--env-file=.env", "server.mjs"] },
   },
@@ -121,11 +128,20 @@ async function one(name) {
     const sidecar = readdirSync(path.join(dir, "content/media")).find((n) => n.endsWith(".meta.json"));
     if (sidecar && (await fetch(`${base}${new URL(url).pathname.replace(/[^/]+$/, sidecar)}`)).status === 200) throw new Error("the .meta.json sidecar is publicly readable");
     if (!readdirSync(path.join(dir, "content/post")).some((n) => n !== "hand-written.md" && n.endsWith(".md"))) throw new Error("published entries are not files under content/post");
-    return "extra checks: hand-written file listed, upload stored and served, sidecar private, entries are files\n";
+    let more = "extra checks: hand-written file listed, upload stored and served, sidecar private, entries are files\n";
+    if (f.seo) {
+      const seo = spawnSync(process.execPath, [SEO_RUNNER], { env: { ...process.env, BASE_URL: base, API_KEY: key }, encoding: "utf8" });
+      if (seo.status !== 0) throw new Error(`SEO rendering conformance failed:\n${seo.stdout}${seo.stderr}`);
+      more += `seo-runner: ${seo.stdout.trim().split("\n").join(" | ")}\n`;
+    }
+    return more;
   };
 
+  const port = await freePort();
+  const runEnv = f.seo ? { INKWIRE_SITE_URL: `http://127.0.0.1:${port}`, INKWIRE_URL_TEMPLATE: "{site}/blog/{slug}" } : {};
+
   const { code, output } = await runConformance({
-    ...f.start, cwd: dir, projectEnv: true, keys: { full: keys[1], ro: keys[2] }, checks,
+    ...f.start, cwd: dir, port, env: runEnv, projectEnv: true, keys: { full: keys[1], ro: keys[2] }, checks,
   });
   console.log(output.split("\n").filter((l) => !l.startsWith("PASS ")).join("\n"));
   return code === 0 && /\b56 passed, 0 skipped, 0 failed/.test(output);
