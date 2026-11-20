@@ -977,5 +977,622 @@
    "errorCode": "forbidden"
   },
   "endpoint": "/api/media"
+ },
+ {
+  "name": "categories, cover alt and the new seo fields round-trip",
+  "feature": "get",
+  "setup": [
+   {
+    "body": {
+     "external_id": "{{run}}-x-1",
+     "title": "Extras",
+     "markdown": "body",
+     "excerpt": "Ex",
+     "categories": [
+      "Guides",
+      "How-to"
+     ],
+     "cover_image_url": "https://example.com/c.jpg",
+     "cover_image_alt": "A cover",
+     "seo": {
+      "og_title": "OG title",
+      "og_description": "OG desc",
+      "json_ld": "{\"@context\":\"https://schema.org\",\"@type\":\"FAQPage\"}"
+     }
+    },
+    "captureBodyAs": "x1"
+   }
+  ],
+  "method": "GET",
+  "endpoint": "/api/content/{{x1.id}}",
+  "expect": {
+   "status": 200,
+   "path": {
+    "categories.0": "Guides",
+    "categories.1": "How-to",
+    "cover_image_alt": "A cover",
+    "seo.og_title": "OG title",
+    "seo.og_description": "OG desc",
+    "seo.json_ld": "{\"@context\":\"https://schema.org\",\"@type\":\"FAQPage\"}"
+   }
+  }
+ },
+ {
+  "name": "og fields default to the effective title and description",
+  "feature": "get",
+  "setup": [
+   {
+    "body": {
+     "external_id": "{{run}}-x-2",
+     "title": "Plain title",
+     "markdown": "body",
+     "excerpt": "Plain excerpt"
+    },
+    "captureBodyAs": "x2"
+   }
+  ],
+  "method": "GET",
+  "endpoint": "/api/content/{{x2.id}}",
+  "expect": {
+   "status": 200,
+   "path": {
+    "seo.og_title": "Plain title",
+    "seo.og_description": "Plain excerpt",
+    "seo.json_ld": "absent"
+   }
+  }
+ },
+ {
+  "name": "json_ld that is not JSON -> 400",
+  "body": {
+   "external_id": "{{run}}-x-3",
+   "title": "x",
+   "markdown": "x",
+   "seo": {
+    "json_ld": "{not json"
+   }
+  },
+  "expect": {
+   "status": 400,
+   "errorCode": "invalid_payload"
+  }
+ },
+ {
+  "name": "json_ld that is a bare string -> 400",
+  "body": {
+   "external_id": "{{run}}-x-3b",
+   "title": "x",
+   "markdown": "x",
+   "seo": {
+    "json_ld": "\"text\""
+   }
+  },
+  "expect": {
+   "status": 400,
+   "errorCode": "invalid_payload"
+  }
+ },
+ {
+  "name": "empty og_title -> 400",
+  "body": {
+   "external_id": "{{run}}-x-4",
+   "title": "x",
+   "markdown": "x",
+   "seo": {
+    "og_title": ""
+   }
+  },
+  "expect": {
+   "status": 400,
+   "errorCode": "invalid_payload"
+  }
+ },
+ {
+  "name": "categories that are not an array -> 400",
+  "body": {
+   "external_id": "{{run}}-x-5",
+   "title": "x",
+   "markdown": "x",
+   "categories": "Guides"
+  },
+  "expect": {
+   "status": 400,
+   "errorCode": "invalid_payload"
+  }
+ },
+ {
+  "name": "patch merges the new seo keys and clears categories and cover alt",
+  "feature": "update",
+  "setup": [
+   {
+    "body": {
+     "external_id": "{{run}}-x-6",
+     "title": "Patchy",
+     "markdown": "body",
+     "categories": [
+      "A"
+     ],
+     "cover_image_url": "https://example.com/c.jpg",
+     "cover_image_alt": "old",
+     "seo": {
+      "og_title": "keep me"
+     }
+    },
+    "captureBodyAs": "x6"
+   }
+  ],
+  "method": "PATCH",
+  "endpoint": "/api/content/{{x6.id}}",
+  "body": {
+   "categories": null,
+   "cover_image_alt": null,
+   "seo": {
+    "json_ld": "{\"@type\":\"Thing\"}"
+   }
+  },
+  "expect": {
+   "status": 200,
+   "path": {
+    "categories": "absent",
+    "cover_image_alt": "absent",
+    "seo.og_title": "keep me",
+    "seo.json_ld": "{\"@type\":\"Thing\"}"
+   }
+  }
+ },
+ {
+  "name": "list filter by category",
+  "feature": "list",
+  "setup": [
+   {
+    "body": {
+     "external_id": "{{run}}-x-7",
+     "title": "In cat",
+     "markdown": "x",
+     "categories": [
+      "{{run}}-cat"
+     ]
+    }
+   },
+   {
+    "body": {
+     "external_id": "{{run}}-x-8",
+     "title": "Not in cat",
+     "markdown": "x",
+     "categories": [
+      "other"
+     ]
+    }
+   }
+  ],
+  "method": "GET",
+  "endpoint": "/api/content?category={{run}}-cat&limit=10",
+  "expect": {
+   "status": 200,
+   "path": {
+    "items.0.title": "In cat",
+    "items.0.categories.0": "{{run}}-cat",
+    "items.1": "absent"
+   }
+  }
+ },
+ {
+  "name": "a future published_at is kept as sent",
+  "feature": "get",
+  "requiresFeatures": [
+   "schedule"
+  ],
+  "setup": [
+   {
+    "body": {
+     "external_id": "{{run}}-x-9",
+     "title": "Later",
+     "markdown": "x",
+     "status": "published",
+     "published_at": "2099-01-01T00:00:00.000Z"
+    },
+    "expect": {
+     "status": 200
+    },
+    "captureBodyAs": "x9"
+   }
+  ],
+  "method": "GET",
+  "endpoint": "/api/content/{{x9.id}}",
+  "expect": {
+   "status": 200,
+   "path": {
+    "status": "published",
+    "published_at": "2099-01-01T00:00:00.000Z"
+   }
+  }
+ },
+ {
+  "name": "terms count the entries that carry a tag",
+  "feature": "terms",
+  "setup": [
+   {
+    "body": {
+     "external_id": "{{run}}-t-1",
+     "title": "T1",
+     "markdown": "x",
+     "tags": [
+      "{{run}}-tag"
+     ],
+     "categories": [
+      "{{run}}-tcat"
+     ]
+    }
+   },
+   {
+    "body": {
+     "external_id": "{{run}}-t-2",
+     "title": "T2",
+     "markdown": "x",
+     "tags": [
+      "{{run}}-TAG"
+     ]
+    }
+   }
+  ],
+  "method": "GET",
+  "endpoint": "/api/terms?kind=tag&search={{run}}-tag",
+  "expect": {
+   "status": 200,
+   "path": {
+    "items.0.kind": "tag",
+    "items.0.count": 2,
+    "items.0.slug": "present",
+    "items.1": "absent"
+   }
+  }
+ },
+ {
+  "name": "terms of kind category",
+  "feature": "terms",
+  "method": "GET",
+  "endpoint": "/api/terms?kind=category&search={{run}}-tcat",
+  "expect": {
+   "status": 200,
+   "path": {
+    "items.0.kind": "category",
+    "items.0.name": "{{run}}-tcat",
+    "items.0.count": 1
+   }
+  }
+ },
+ {
+  "name": "terms with a bad kind -> 400",
+  "feature": "terms",
+  "method": "GET",
+  "endpoint": "/api/terms?kind=color",
+  "expect": {
+   "status": 400,
+   "errorCode": "invalid_payload"
+  }
+ },
+ {
+  "name": "terms without a key -> 401",
+  "feature": "terms",
+  "method": "GET",
+  "auth": false,
+  "endpoint": "/api/terms",
+  "expect": {
+   "status": 401,
+   "errorCode": "unauthorized"
+  }
+ },
+ {
+  "name": "media upload reports type and time",
+  "feature": "media",
+  "endpoint": "/api/media",
+  "multipart": {
+   "file": {
+    "field": "file",
+    "filename": "px.png",
+    "contentType": "image/png",
+    "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+   },
+   "fields": {
+    "alt": "{{run}} meta"
+   }
+  },
+  "expect": {
+   "status": 200,
+   "path": {
+    "mime_type": "image/png",
+    "created_at": "present"
+   }
+  }
+ },
+ {
+  "name": "media library lists uploads newest first",
+  "feature": "media_list",
+  "setup": [
+   {
+    "endpoint": "/api/media",
+    "multipart": {
+     "file": {
+      "field": "file",
+      "filename": "px.png",
+      "contentType": "image/png",
+      "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+     },
+     "fields": {
+      "alt": "{{run}} lib one"
+     }
+    }
+   },
+   {
+    "sleepMs": 1100
+   },
+   {
+    "endpoint": "/api/media",
+    "multipart": {
+     "file": {
+      "field": "file",
+      "filename": "px.png",
+      "contentType": "image/png",
+      "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+     },
+     "fields": {
+      "alt": "{{run}} lib two"
+     }
+    }
+   }
+  ],
+  "method": "GET",
+  "endpoint": "/api/media?search={{run}} lib&limit=10",
+  "expect": {
+   "status": 200,
+   "path": {
+    "items.0.alt": "{{run}} lib two",
+    "items.1.alt": "{{run}} lib one",
+    "items.0.url": "present",
+    "items.0.mime_type": "image/png",
+    "items.0.created_at": "present",
+    "items.2": "absent"
+   }
+  }
+ },
+ {
+  "name": "media library pages with a cursor",
+  "feature": "media_list",
+  "setup": [
+   {
+    "endpoint": "/api/media",
+    "multipart": {
+     "file": {
+      "field": "file",
+      "filename": "px.png",
+      "contentType": "image/png",
+      "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+     },
+     "fields": {
+      "alt": "{{run}} page a"
+     }
+    }
+   },
+   {
+    "sleepMs": 1100
+   },
+   {
+    "endpoint": "/api/media",
+    "multipart": {
+     "file": {
+      "field": "file",
+      "filename": "px.png",
+      "contentType": "image/png",
+      "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+     },
+     "fields": {
+      "alt": "{{run}} page b"
+     }
+    }
+   }
+  ],
+  "method": "GET",
+  "endpoint": "/api/media?search={{run}} page&limit=1",
+  "expect": {
+   "status": 200,
+   "path": {
+    "items.0.alt": "{{run}} page b",
+    "items.1": "absent",
+    "next_cursor": "present"
+   }
+  }
+ },
+ {
+  "name": "media library bad limit -> 400",
+  "feature": "media_list",
+  "method": "GET",
+  "endpoint": "/api/media?limit=0",
+  "expect": {
+   "status": 400,
+   "errorCode": "invalid_payload"
+  }
+ },
+ {
+  "name": "media library bad cursor -> 400",
+  "feature": "media_list",
+  "method": "GET",
+  "endpoint": "/api/media?cursor=!!!",
+  "expect": {
+   "status": 400,
+   "errorCode": "invalid_payload"
+  }
+ },
+ {
+  "name": "media patch sets alt and title",
+  "feature": "media_update",
+  "setup": [
+   {
+    "endpoint": "/api/media",
+    "multipart": {
+     "file": {
+      "field": "file",
+      "filename": "px.png",
+      "contentType": "image/png",
+      "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+     },
+     "fields": {
+      "alt": "old alt"
+     }
+    },
+    "captureBodyAs": "m1"
+   }
+  ],
+  "method": "PATCH",
+  "endpoint": "/api/media/{{m1.id}}",
+  "body": {
+   "alt": "new alt",
+   "title": "A title"
+  },
+  "expect": {
+   "status": 200,
+   "path": {
+    "alt": "new alt",
+    "title": "A title",
+    "url": "present",
+    "id": "{{m1.id}}"
+   }
+  }
+ },
+ {
+  "name": "media patch null clears alt",
+  "feature": "media_update",
+  "setup": [
+   {
+    "endpoint": "/api/media",
+    "multipart": {
+     "file": {
+      "field": "file",
+      "filename": "px.png",
+      "contentType": "image/png",
+      "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+     },
+     "fields": {
+      "alt": "to clear"
+     }
+    },
+    "captureBodyAs": "m2"
+   }
+  ],
+  "method": "PATCH",
+  "endpoint": "/api/media/{{m2.id}}",
+  "body": {
+   "alt": null
+  },
+  "expect": {
+   "status": 200,
+   "path": {
+    "alt": "absent"
+   }
+  }
+ },
+ {
+  "name": "media patch unknown id -> 404",
+  "feature": "media_update",
+  "method": "PATCH",
+  "endpoint": "/api/media/no-such-media-{{run}}",
+  "body": {
+   "alt": "x"
+  },
+  "expect": {
+   "status": 404,
+   "errorCode": "not_found"
+  }
+ },
+ {
+  "name": "media patch empty body -> 400",
+  "feature": "media_update",
+  "setup": [
+   {
+    "endpoint": "/api/media",
+    "multipart": {
+     "file": {
+      "field": "file",
+      "filename": "px.png",
+      "contentType": "image/png",
+      "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+     },
+     "fields": {
+      "alt": "empty patch"
+     }
+    },
+    "captureBodyAs": "m3"
+   }
+  ],
+  "method": "PATCH",
+  "endpoint": "/api/media/{{m3.id}}",
+  "body": {},
+  "expect": {
+   "status": 400,
+   "errorCode": "invalid_payload"
+  }
+ },
+ {
+  "name": "media patch unknown field -> 400",
+  "feature": "media_update",
+  "setup": [
+   {
+    "endpoint": "/api/media",
+    "multipart": {
+     "file": {
+      "field": "file",
+      "filename": "px.png",
+      "contentType": "image/png",
+      "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+     },
+     "fields": {
+      "alt": "unknown field"
+     }
+    },
+    "captureBodyAs": "m4"
+   }
+  ],
+  "method": "PATCH",
+  "endpoint": "/api/media/{{m4.id}}",
+  "body": {
+   "url": "https://example.com/x.png"
+  },
+  "expect": {
+   "status": 400,
+   "errorCode": "invalid_payload"
+  }
+ },
+ {
+  "name": "read-only key can list media",
+  "feature": "media_list",
+  "auth": "ro",
+  "method": "GET",
+  "endpoint": "/api/media?limit=1",
+  "expect": {
+   "status": 200
+  }
+ },
+ {
+  "name": "read-only key can list terms",
+  "feature": "terms",
+  "auth": "ro",
+  "method": "GET",
+  "endpoint": "/api/terms",
+  "expect": {
+   "status": 200
+  }
+ },
+ {
+  "name": "read-only key cannot patch media -> 403",
+  "feature": "media_update",
+  "auth": "ro",
+  "method": "PATCH",
+  "endpoint": "/api/media/anything",
+  "body": {
+   "alt": "x"
+  },
+  "expect": {
+   "status": 403,
+   "errorCode": "forbidden"
+  }
  }
 ]

@@ -79,6 +79,22 @@
         "noindex": {
           "type": "boolean",
           "default": false
+        },
+        "og_title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "og_description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "json_ld": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 20000,
+          "description": "One JSON object or array of objects, serialized. Receivers also check that it parses."
         }
       }
     },
@@ -105,7 +121,21 @@
     },
     "published_at": {
       "type": "string",
-      "format": "date-time"
+      "format": "date-time",
+      "description": "A time in the future schedules the entry (see the schedule feature)."
+    },
+    "categories": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64
+      },
+      "maxItems": 50
+    },
+    "cover_image_alt": {
+      "type": "string",
+      "maxLength": 1024
     }
   }
 }

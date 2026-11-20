@@ -15,12 +15,19 @@
     "title": "Search result title",
     "description": "Search result description",
     "image_url": "https://example.com/og.jpg",
-    "noindex": false
+    "noindex": false,
+    "og_title": "Social title",
+    "og_description": "Social description",
+    "json_ld": "{\"@context\":\"https://schema.org\",\"@type\":\"FAQPage\"}"
   },
   "author": {
     "name": "Isaac",
     "email": "i@x.com"
   },
   "status": "published",
-  "published_at": "2026-07-22T04:00:00Z"
+  "published_at": "2026-07-22T04:00:00Z",
+  "categories": [
+    "Guides"
+  ],
+  "cover_image_alt": "A red bicycle"
 }

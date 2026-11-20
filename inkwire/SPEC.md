@@ -4,10 +4,6 @@ The machine-readable request schemas are `schema/inkwire-content.schema.json` (c
 `schema/inkwire-patch.schema.json` (edit) and `schema/inkwire-discovery.schema.json`
 (discovery); they are authoritative where prose and schema disagree.
 
-> v1 was revised in place in November 2026, before public adoption: the resource moved from
-> `/api/posts` to `/api/content` with a `kind` field, and reading, editing, media and discovery
-> were added. Nothing conforms to the earlier shape.
-
 ## The wire contract
 
 ### Endpoint
@@ -35,17 +31,22 @@ Idempotency-Key: gen-2026-07-22-abc        # optional; defaults to external_id
   "slug": "cut-audit-time",               // optional. Receiver finalizes/dedupes.
   "excerpt": "Short summary",             // optional.
   "tags": ["seo", "ai"],                  // optional. string[].
-  "cover_image_url": "https://.../c.jpg", // optional. URL only in v1.
+  "categories": ["Guides"],               // optional. string[]. A second, coarser grouping.
+  "cover_image_url": "https://.../c.jpg", // optional. URL only.
+  "cover_image_alt": "A red bicycle",     // optional. Alt text for the cover image.
   "canonical_url": "https://origin/post", // optional. Cross-post SEO.
   "seo": {                                // optional SEO Profile 1 overrides.
     "title": "Search result title",
     "description": "Search result description",
     "image_url": "https://.../og.jpg",
-    "noindex": false
+    "noindex": false,
+    "og_title": "Social card title",
+    "og_description": "Social card description",
+    "json_ld": "{\"@context\":\"https://schema.org\",\"@type\":\"FAQPage\"}"
   },
   "author": { "name": "Isaac", "email": "i@x.com" }, // optional.
   "status": "published",                  // "published" | "draft". Default "draft".
-  "published_at": "2026-07-22T04:00:00Z"  // optional ISO-8601. Default now().
+  "published_at": "2026-07-22T04:00:00Z"  // optional ISO-8601. Default now(). In the future = scheduled.
 }
 ```
 
@@ -79,6 +80,11 @@ Response header: `Inkwire-Version: 1`.
   already owns, the receiver returns `409 conflict` rather than silently changing
   it. Final slug is always returned in the response.
 - **Status:** `draft` entries are stored but not publicly listed/rendered.
+- **Scheduling:** a `published` entry whose `published_at` is in the future is **scheduled**: it is
+  stored now and goes live when that time arrives. A receiver that really holds such entries back
+  advertises the `schedule` feature; one that does not would publish it at once, so a publisher
+  only schedules against a receiver that advertises it. Reads report `status: "published"` with the
+  future `published_at`; clients derive "scheduled" from the two.
 - **Kind:** entries of different kinds never collide on `external_id` or `slug`. A `kind` the
   receiver does not hold is a `400 invalid_payload`.
 
@@ -93,17 +99,24 @@ title       = seo.title       ?? title
 description = seo.description ?? first non-empty value of (excerpt, title)
 image_url   = seo.image_url   ?? cover_image_url (may be absent)
 noindex     = seo.noindex     ?? false
+og_title    = seo.og_title    ?? title        (the effective title above)
+og_description = seo.og_description ?? description (the effective description above)
+json_ld     = seo.json_ld     (absent when not set)
 canonical   = canonical_url   ?? the entry's absolute public URL
 ```
 
-`seo.title` and `seo.description` must be non-empty when provided. SEO URLs
+`seo.json_ld` is one JSON object (or array of objects) serialized as a string, at most 20000
+characters; a value that does not parse is `400 invalid_payload`. It is emitted as an additional
+JSON-LD block next to the generated one.
+
+`seo.title`, `seo.description`, `seo.og_title` and `seo.og_description` must be non-empty when provided. SEO URLs
 must use `http://` or `https://`. Unknown properties are invalid. Existing
 top-level fields remain authoritative for canonical URL, author, publication
 date, and tags; the profile does not duplicate them inside `seo`.
 
 A receiver core conforms to the **SEO input profile** when it validates these
-overrides and supplies the effective `title`, `description`, `image_url`, and
-`noindex` values to the application-owned store. The public URL is only known
+overrides and supplies the effective `title`, `description`, `image_url`, `noindex`,
+`og_title`, `og_description` and `json_ld` values to the application-owned store. The public URL is only known
 after the store finalizes the entry, so the page renderer applies the canonical
 fallback.
 
@@ -111,8 +124,8 @@ A site may additionally claim **SEO rendering conformance** for publicly
 accessible `published` entries. Its returned HTML page must safely render:
 
 - one document `<title>` using the effective title;
-- `description`, canonical, `og:type=article`, `og:title`, `og:description`, and
-  `og:url` tags using the effective values;
+- `description`, canonical, `og:type=article`, `og:title` (the effective `og_title`),
+  `og:description` (the effective `og_description`), and `og:url` tags;
 - `twitter:card`, `twitter:title`, and `twitter:description` tags;
 - `og:image` and `twitter:image` when an effective image exists;
 - `<meta name="robots" content="noindex,follow">` when `noindex` is true; and
@@ -137,35 +150,34 @@ auth as everything else.
 ```json
 {
   "inkwire": 1,
-  "site": { "name": "Acme", "url": "https://acme.com" },
-  "features": ["upsert", "list", "get", "update", "delete", "media"],
+  "site": { "name": "Acme", "url": "https://acme.com", "description": "Acme's blog", "language": "en" },
+  "features": ["upsert", "list", "get", "update", "delete", "terms", "schedule", "media", "media_list", "media_update"],
   "kinds": ["post", "page"],
   "limits": { "markdown_bytes": 1000000, "media_bytes": 10000000 }
 }
 ```
 
-`upsert` is always present. `kinds` lists what the receiver holds (publishers must not send
+`upsert` is always present. `site.description` and `site.language` (a BCP 47 tag) are optional. `kinds` lists what the receiver holds (publishers must not send
 other kinds). `limits` are ceilings in bytes; a request over one answers `413 too_large`. A receiver without this endpoint answers
-404 and clients treat it as `features: ["upsert"]`, `kinds: ["post"]`, no limits — so every
-receiver written before this section still conforms.
+404 and clients treat it as `features: ["upsert"]`, `kinds: ["post"]`, no limits.
 
 ### Reading: `GET /api/content`, `GET /api/content/{id}`  (features `list`, `get`)
 
-`GET /api/content?status=&kind=&tag=&search=&external_id=&slug=&limit=&cursor=` returns
+`GET /api/content?status=&kind=&tag=&category=&search=&external_id=&slug=&limit=&cursor=` returns
 
 ```json
 { "items": [ ContentSummary ], "next_cursor": "opaque-or-null" }
 ```
 
 Entries come **newest first**: by `updated_at` descending, ties broken by `id`. `limit` defaults to 20, at most 100. `cursor` is opaque: pass back `next_cursor` to get the next
-page. `search` matches title, excerpt and markdown, case-insensitively. `tag` matches one tag.
+page. `search` matches title, excerpt and markdown, case-insensitively. `tag` matches one tag, `category` one category.
 Drafts are listed to a caller who holds a key. `GET /api/content/{id}` returns the full entry.
 
 `ContentSummary`: `id`, `external_id` (or `null`), `kind`, `title`, `slug`, `url`, `status`,
-`excerpt`, `tags`, `published_at`, `updated_at`. The full entry adds `markdown`,
-`cover_image_url`, `canonical_url`, `author`, and `seo`, which holds the **effective** values
-(the overrides applied over the derived defaults from SEO Profile 1: `title`, `description`,
-`image_url`, `noindex`). Every single-entry response carries an `ETag` header — opaque, changes
+`excerpt`, `tags`, `categories`, `published_at`, `updated_at`. The full entry adds `markdown`,
+`cover_image_url`, `cover_image_alt`, `canonical_url`, `author`, and `seo`, which holds the
+**effective** values (the overrides applied over the derived defaults from SEO Profile 1:
+`title`, `description`, `image_url`, `noindex`, `og_title`, `og_description`, `json_ld`). Every single-entry response carries an `ETag` header — opaque, changes
 on every accepted write.
 
 Entries the site already had, or wrote by hand, are first-class: they appear in listings with
@@ -175,9 +187,10 @@ site auditable on day one.
 ### Editing: `PATCH /api/content/{id}`  (feature `update`)
 
 Body: any subset of the publish fields (`title`, `kind`, `markdown`, `slug`, `excerpt`, `tags`,
-`cover_image_url`, `canonical_url`, `seo`, `author`, `status`, `published_at`). Given fields
-replace the stored value; omitted fields keep theirs; `null` clears an optional field
-(`excerpt`, `tags`, `cover_image_url`, `canonical_url`, `seo`, `author`, `published_at`).
+`categories`, `cover_image_url`, `cover_image_alt`, `canonical_url`, `seo`, `author`, `status`,
+`published_at`). Given fields replace the stored value; omitted fields keep theirs; `null`
+clears an optional field (`excerpt`, `tags`, `categories`, `cover_image_url`, `cover_image_alt`,
+`canonical_url`, `seo`, `author`, `published_at`).
 `seo` present as an object is merged per key. `external_id` cannot be changed (a body that
 carries it is `400 invalid_payload`). A `kind` change is allowed when the receiver holds the
 target kind; slug rules then apply in the target kind. A new `slug` follows the publish rules
@@ -199,6 +212,19 @@ Removes the entry from the public site. A receiver may keep it internally (trash
 flip) but it must stop being public. Honours `If-Match`. Response:
 `{ "id": "...", "deleted": true }`.
 
+### Terms: `GET /api/terms`  (feature `terms`)
+
+The tags and categories the entries use. There is nothing to create: a term exists while an
+entry carries it. `GET /api/terms?kind=&search=&limit=` (`kind` is `tag` or `category`, `search`
+a case-insensitive substring of the name, `limit` defaults to 100, at most 500) returns
+
+```json
+{ "items": [ { "kind": "tag", "name": "SEO", "slug": "seo", "count": 12 } ] }
+```
+
+Most used first, then by name. Names that differ only in case are one term (the most used
+spelling is reported). `count` is the number of entries carrying it, drafts included.
+
 ### Media: `POST /api/media`  (feature `media`)
 
 Either `multipart/form-data` with a `file` part and an optional `alt` field, or JSON
@@ -206,12 +232,25 @@ Either `multipart/form-data` with a `file` part and an optional `alt` field, or 
 `http(s)` hosts only). Response:
 
 ```json
-{ "id": "...", "url": "https://site/uploads/x.jpg", "alt": "..." }
+{ "id": "...", "url": "https://site/uploads/x.jpg", "alt": "...", "mime_type": "image/jpeg", "created_at": "2026-07-22T04:00:00.000Z" }
 ```
 
 Use `url` in markdown or as `cover_image_url`. Only images (`jpeg`, `png`, `gif`, `webp`,
 `avif`; never SVG) up to `limits.media_bytes` (over it: `413 too_large`). A site with nowhere to store files omits the
 feature: `cover_image_url` and markdown images keep working with any public URL.
+
+### The media library: `GET /api/media`, `PATCH /api/media/{id}`  (features `media_list`, `media_update`)
+
+`GET /api/media?search=&limit=&cursor=` lists what was uploaded, newest first (by `created_at`,
+ties by `id`), with the same `limit` and `cursor` rules as content:
+
+```json
+{ "items": [ { "id": "...", "url": "...", "alt": "...", "title": "...", "mime_type": "image/png", "created_at": "..." } ], "next_cursor": null }
+```
+
+`search` matches the alt text, title and filename. `PATCH /api/media/{id}` takes `{ "alt"?: string | null, "title"?: string | null }`
+(at least one; `null` clears) and answers with the media item. Unknown id: `404 not_found`.
+
 
 ### Errors
 

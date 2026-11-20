@@ -114,3 +114,24 @@ test("media: url variant validates", () => {
   assert.equal(media({ alt: "no url" }), false);
   assert.equal(media({ url: "https://x.test/a.jpg", bogus: 1 }), false);
 });
+
+const mediaPatch = compile("./inkwire-media-patch.schema.json");
+test("create: categories, cover alt, og fields and json_ld pass; empty ones fail", () => {
+  const base = { external_id: "n-1", title: "T", markdown: "x" };
+  assert.equal(create({ ...base, categories: ["Guides"], cover_image_alt: "alt", seo: { og_title: "t", og_description: "d", json_ld: "{}" } }), true);
+  assert.equal(create({ ...base, categories: [""] }), false);
+  assert.equal(create({ ...base, seo: { og_title: "" } }), false);
+  assert.equal(create({ ...base, seo: { json_ld: null } }), false);
+});
+test("patch: new fields clear with null", () => {
+  assert.equal(patch({ categories: null, cover_image_alt: null, seo: { json_ld: null } }), true);
+});
+test("discovery: site description and language", () => {
+  assert.equal(discovery({ inkwire: 1, site: { name: "A", url: "https://a.test", description: "d", language: "en-GB" }, features: ["upsert", "terms", "schedule", "media_list"], kinds: ["post"] }), true);
+  assert.equal(discovery({ inkwire: 1, site: { language: "english please" }, features: ["upsert"], kinds: ["post"] }), false);
+});
+test("media patch: needs a field; null clears", () => {
+  assert.equal(mediaPatch({}), false);
+  assert.equal(mediaPatch({ alt: null, title: "T" }), true);
+  assert.equal(mediaPatch({ url: "https://x.test/a.png" }), false);
+});
