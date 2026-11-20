@@ -1,33 +1,91 @@
-export interface StoredPost { id: string; slug: string; url: string; external_id: string; }
+export type { UpsertInput, PatchInput } from "./schema.js";
+
+/** Effective SEO values (SEO Profile 1): the overrides applied over the derived defaults. */
 export interface SeoMetadata {
-  title: string; description: string; image_url?: string; noindex: boolean;
+  title: string;
+  description: string;
+  image_url?: string;
+  noindex: boolean;
 }
-export interface UpsertInput {
-  external_id: string; title: string; html: string; markdown: string; slug: string;
-  excerpt?: string; tags?: string[]; cover_image_url?: string; canonical_url?: string;
-  seo: SeoMetadata; author?: { name?: string; email?: string };
-  status: "draft" | "published"; published_at: string;
+
+/** What the caller overrode. Only keys the caller sent are present. */
+export interface SeoOverrides {
+  title?: string;
+  description?: string;
+  image_url?: string;
+  noindex?: boolean;
 }
-export interface PostStore {
-  findByExternalId(key: string, externalId: string): Promise<StoredPost | null>;
-  findBySlug(key: string, slug: string): Promise<StoredPost | null>;
-  upsert(key: string, post: UpsertInput): Promise<{ id: string; url: string; slug: string; created: boolean }>;
+
+/** An entry as a store holds it. `url` and `etag` are finalized by the store. */
+export interface StoredContent {
+  id: string;
+  /** The scope the entry belongs to (`ApiKey.scope`). */
+  key: string;
+  external_id: string | null;
+  kind: string;
+  title: string;
+  slug: string;
+  markdown: string;
+  html: string;
+  excerpt?: string;
+  tags?: string[];
+  cover_image_url?: string;
+  canonical_url?: string;
+  seo: SeoOverrides | null;
+  author?: { name?: string; email?: string };
+  status: "draft" | "published";
+  published_at: string;
+  updated_at: string;
+  version: number;
+  etag: string;
+  /** Public address, finalized by the store. */
+  url: string;
 }
-export class MemoryStore implements PostStore {
-  private byExt = new Map<string, StoredPost>();
-  private bySlug = new Map<string, StoredPost>();
-  private seq = 0;
-  private k(key: string, id: string) { return `${key}::${id}`; }
-  async findByExternalId(key: string, externalId: string) { return this.byExt.get(this.k(key, externalId)) ?? null; }
-  async findBySlug(key: string, slug: string) { return this.bySlug.get(this.k(key, slug)) ?? null; }
-  async upsert(key: string, post: UpsertInput) {
-    const existing = this.byExt.get(this.k(key, post.external_id));
-    const id = existing?.id ?? String(++this.seq);
-    const slug = post.slug;
-    const url = `https://demo.local/blog/${slug}`;
-    const rec: StoredPost = { id, slug, url, external_id: post.external_id };
-    this.byExt.set(this.k(key, post.external_id), rec);
-    this.bySlug.set(this.k(key, slug), rec);
-    return { id, url, slug, created: !existing };
-  }
+
+/** What the handlers give `save`. `id` is absent on create; present (the old id) when updating, even if kind/slug moved it. */
+export type SaveEntry = Omit<StoredContent, "id" | "url" | "etag"> & { id?: string };
+
+export interface ListFilter {
+  status?: "draft" | "published";
+  kind?: string;
+  tag?: string;
+  /** Case-insensitive match over title, excerpt and markdown. */
+  search?: string;
+  external_id?: string;
+  slug?: string;
+  limit: number;
+  cursor?: string;
+}
+
+export interface ListResult {
+  items: StoredContent[];
+  next_cursor: string | null;
+}
+
+export interface StoredMedia {
+  id: string;
+  url: string;
+  alt?: string;
+}
+
+export interface MediaInput {
+  bytes: Buffer;
+  /** One of image/jpeg, png, gif, webp, avif, already sniffed by the core. */
+  contentType: string;
+  filename: string;
+  alt?: string;
+}
+
+/**
+ * The whole storage contract: four methods, every one scoped by `key` (the `ApiKey.scope`). Slug
+ * conflicts and external_id lookups go through `list` with exact filters, so implement those
+ * efficiently. `saveMedia` is optional: a store without it makes the receiver omit the `media`
+ * feature.
+ */
+export interface ContentStore {
+  get(key: string, id: string): Promise<StoredContent | null>;
+  list(key: string, filter: ListFilter): Promise<ListResult>;
+  save(key: string, entry: SaveEntry): Promise<StoredContent>;
+  remove(key: string, id: string): Promise<boolean>;
+  saveMedia?(key: string, media: MediaInput): Promise<StoredMedia>;
 }
