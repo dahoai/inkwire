@@ -52,6 +52,6 @@ it("sends through a custom fetch when given one", async () => {
   vi.stubGlobal("fetch", vi.fn());
   await publish("https://site.test/", "k", { external_id: "e", title: "T", markdown: "x" }, { fetch: custom });
   expect(custom).toHaveBeenCalledTimes(1);
-  expect((custom.mock.calls[0] as any)[0]).toBe("https://site.test/api/posts");
+  expect((custom.mock.calls[0] as any)[0]).toBe("https://site.test/api/content");
   expect(fetch).not.toHaveBeenCalled();
 });
