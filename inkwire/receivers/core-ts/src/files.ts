@@ -24,10 +24,16 @@ export function parseId(id: string): { kind: string; slug: string } | null {
 
 export type Draft = Omit<StoredContent, "id" | "key" | "etag" | "url">;
 
+/** A date as a full ISO-8601 timestamp with an offset: date-only and zone-less values are read as UTC. */
 const iso = (v: unknown): string | undefined => {
   if (v instanceof Date && !Number.isNaN(v.getTime())) return v.toISOString();
-  if (typeof v === "string" && v && !Number.isNaN(Date.parse(v))) return v;
-  return undefined;
+  if (typeof v !== "string") return undefined;
+  const t = v.trim();
+  if (!t) return undefined;
+  let full = t;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) full = `${t}T00:00:00.000Z`;
+  else if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(t)) full = `${t.replace(" ", "T")}Z`;
+  return Number.isNaN(Date.parse(full)) ? undefined : full;
 };
 const str = (v: unknown): string | undefined =>
   typeof v === "number" && Number.isFinite(v) ? String(v) : typeof v === "string" && v.trim() ? v : undefined;

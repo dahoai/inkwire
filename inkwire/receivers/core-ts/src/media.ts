@@ -114,7 +114,12 @@ export function parseMultipart(body: Buffer, contentType: string): MultipartPart
 /** A filename safe on any disk: no path, no odd characters, an extension that matches the real type. */
 export function safeFilename(name: string | undefined, type: ImageType): string {
   const base = (name ?? "").split(/[\\/]/).pop() ?? "";
-  const cleaned = base.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[.-]+/, "").slice(0, 80);
-  const stem = cleaned.replace(/\.[A-Za-z0-9]{1,5}$/, "") || "image";
-  return `${stem}.${EXTENSION[type]}`;
+  const lastDot = base.lastIndexOf(".");
+  const rawStem = lastDot > 0 ? base.slice(0, lastDot) : base;
+  const stem = rawStem
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^[.-]+|[.-]+$/g, "")
+    .slice(0, 80)
+    .replace(/[.-]+$/g, "");
+  return `${stem || "image"}.${EXTENSION[type]}`;
 }
