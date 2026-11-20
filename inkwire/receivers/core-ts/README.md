@@ -31,7 +31,7 @@ res.writeHead(r.status, r.headers).end(JSON.stringify(r.body));
 | `POST /api/media` | `handleMedia` | `contentType`, `rawBody` (Buffer), `store`, `config` |
 | `GET /api/inkwire` | `handleDiscovery` (or `discoveryBody(config)`) | `config` |
 
-The adapter sets `ETag`/`If-Match` itself only by passing the `If-Match` header through; the core puts a quoted `ETag` on every single-entry response. Mount only what you support and list it in `config.features` (default: all but `media`, which appears when `config.fetchMedia` is set; `upsert` is always advertised).
+Pass the request's `If-Match` header through as `ifMatchHeader`; the core puts a quoted `ETag` on every single-entry response (and on the upsert response). Mount only what you support and list it in `config.features` (default: all but `media`, which appears when `config.fetchMedia` is set; `upsert` is always advertised).
 
 ## Keys
 
