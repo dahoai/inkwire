@@ -13,7 +13,9 @@ Inkwire receiver added.
   + app/api/_inkwire/config.ts
   + app/api/content/route.ts
   + app/api/content/[id]/route.ts
+  + app/api/terms/route.ts
   + app/api/media/route.ts
+  + app/api/media/[id]/route.ts
   + app/api/inkwire/route.ts
   + app/inkwire-media/[...path]/route.ts
   + content/ (entries live here as markdown files)

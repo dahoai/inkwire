@@ -1,6 +1,6 @@
 # Inkwire
 
-> Inkwire is an open protocol (REST + JSON) for publishing and editing content (blog posts, pages, docs) on any website: upsert by external_id, read/list/edit/delete with ETag/If-Match, image upload, server-side Markdown sanitization, portable SEO defaults, read-only keys. A site that implements it can be operated by an agent.
+> Inkwire is an open protocol (REST + JSON) for managing content (blog posts, pages, docs) on any website: upsert by external_id, read/list/edit/delete with ETag/If-Match, tags and categories with a terms listing, scheduling, a media library (upload, list, alt text), full SEO control (Open Graph, JSON-LD, noindex), server-side Markdown sanitization, read-only keys. A site that implements it can be operated by an agent or a CMS tool.
 
 You are probably here to add Inkwire to a site, or to change the protocol or a receiver. Read in this order.
 
@@ -14,13 +14,14 @@ You are probably here to add Inkwire to a site, or to change the protocol or a r
 
 - [inkwire/SPEC.md](inkwire/SPEC.md): source of truth for endpoints, fields, error codes, SEO Profile 1.
 - [inkwire/schema/](inkwire/schema/): JSON Schemas (content, patch, media, discovery); authoritative where prose and schema disagree.
-- Endpoints: `POST/GET /api/content`, `GET/PATCH/DELETE /api/content/{id}`, `POST /api/media`, `GET /api/inkwire` (discovery: features, kinds, limits). Bearer auth; keys ending `:ro` are read-only. Every response carries `Inkwire-Version: 1`. Errors are `{"error":{"code","message"}}`.
+- Endpoints: `POST/GET /api/content`, `GET/PATCH/DELETE /api/content/{id}`, `GET /api/terms`, `POST/GET /api/media`, `PATCH /api/media/{id}`, `GET /api/inkwire` (discovery: features, kinds, limits). Bearer auth; keys ending `:ro` are read-only. Every response carries `Inkwire-Version: 1`. Errors are `{"error":{"code","message"}}`.
 
 ## The gate (a receiver is conformant when these pass)
 
-- API: `cd inkwire/conformance && BASE_URL=<site> API_KEY=<full key> READONLY_KEY=<ro key> node runner.mjs` runs every case for the features the site advertises. It writes test entries; use staging.
-- Rendered pages: `BASE_URL=<site> API_KEY=<full key> node seo-runner.mjs` checks SEO Profile 1 output of a published entry's public page.
-- Reference receivers must show `56 passed, 0 skipped, 0 failed`.
+- API: `npx inkwire-conformance <site> --key <full key> --readonly-key <ro key>` runs every case for the features the site advertises (package in inkwire/conformance). It writes test entries; use staging.
+- Rendered pages: add `--seo` to also check SEO Profile 1 output of a published entry's public page.
+- A reference receiver may skip only `schedule` (it holds nothing back); every other advertised feature must pass with 0 failed.
+- Own database? [Backing it with a database](inkwire/receivers/core-ts/README.md#backing-it-with-a-database): implement `ContentStore` and run `runStoreContract` from `inkwire-receiver-core/testing`.
 
 ## Code map
 

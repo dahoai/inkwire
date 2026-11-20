@@ -22,9 +22,11 @@ Do not commit the keys. Show me the diff when you are done.
 | Endpoint | What it does |
 | --- | --- |
 | `POST /api/content` | Create or update an entry (upsert on `external_id` + `kind`) |
-| `GET /api/content` | List, with `status`, `kind`, `tag`, `search`, `external_id`, `slug`, `limit`, `cursor` |
+| `GET /api/content` | List, with `status`, `kind`, `tag`, `category`, `search`, `external_id`, `slug`, `limit`, `cursor` |
 | `GET` / `PATCH` / `DELETE /api/content/{id}` | Read (with an `ETag`), edit any fields (`If-Match` to avoid overwriting a newer edit), delete |
+| `GET /api/terms` | The tags and categories in use, with counts |
 | `POST /api/media` | Upload an image (multipart) or have the site fetch one from a public URL |
+| `GET /api/media`, `PATCH /api/media/{id}` | Browse the media library (search, paging); set an image's alt text and title |
 | `GET /api/inkwire` | What this site supports: features, kinds, limits |
 
 Two keys: a **full** key (read and write) and a **read-only** key (`:ro`, for audits; every write is `403`). Content is markdown files in `content/<kind>/<slug>.md` with YAML frontmatter, so files you already have there are listed and editable as they are. The wire contract is [`inkwire/SPEC.md`](inkwire/SPEC.md).
@@ -38,7 +40,7 @@ npx create-inkwire            # detects Next.js, Express or FastAPI from package
 npx create-inkwire --framework next --root ./content --site-url https://www.example.com --yes
 ```
 
-It writes the routes (Next.js: `app/api/{content,media,inkwire}` and `app/inkwire-media`; Express: one `inkwire-router.(mjs|ts)` file), adds `inkwire-receiver-core` to `package.json` and installs it, creates `content/`, and appends `INKWIRE_API_KEYS`, `INKWIRE_SITE_URL` and `INKWIRE_ROOT` to `.env.local` (Next.js) or `.env` (Express), which it adds to `.gitignore`. It never overwrites a file or a key that exists. The keys are printed once.
+It writes the routes (Next.js: `app/api/{content,terms,media,inkwire}` and `app/inkwire-media`; Express: one `inkwire-router.(mjs|ts)` file), adds `inkwire-receiver-core` to `package.json` and installs it, creates `content/`, and appends `INKWIRE_API_KEYS`, `INKWIRE_SITE_URL` and `INKWIRE_ROOT` to `.env.local` (Next.js) or `.env` (Express), which it adds to `.gitignore`. It never overwrites a file or a key that exists. The keys are printed once.
 
 Express only: mount the router **before** `express.json()` (it reads its own bodies, and its errors then keep the Inkwire shape), and load `.env` (`node --env-file=.env`, or dotenv):
 
@@ -51,7 +53,7 @@ Check:
 
 ```bash
 curl -H "Authorization: Bearer <full key>" http://localhost:3000/api/inkwire
-# {"inkwire":1,"site":{...},"features":["upsert","list","get","update","delete","media"],"kinds":["post","page"],"limits":{...}}
+# {"inkwire":1,"site":{...},"features":["upsert","list","get","update","delete","terms","media","media_url","media_list","media_update"],"kinds":["post","page"],"limits":{...}}
 ```
 
 ## 2. Render what gets published
@@ -213,7 +215,7 @@ author: { name: Ada }
 published_at: 2026-07-22T10:00:00.000Z
 ```
 
-A collection over `content/post/*.md` (`glob` loader, `base: "./content/post"`) and a layout head that applies the SEO Profile 1 defaults (`title = seo.title ?? title`, `description = seo.description ?? excerpt ?? title`, `image = seo.image_url ?? cover_image_url`, canonical = `canonical_url ?? the page URL`) give the same output as the snippets above. This section was not run against a real Astro project here; run `seo-runner.mjs` against yours (below).
+A collection over `content/post/*.md` (`glob` loader, `base: "./content/post"`) and a layout head that applies the SEO Profile 1 defaults (`title = seo.title ?? title`, `description = seo.description ?? excerpt ?? title`, `image = seo.image_url ?? cover_image_url`, canonical = `canonical_url ?? the page URL`) give the same output as the snippets above. This section was not run against a real Astro project here; run `npx inkwire-conformance <url> --key <key> --seo` against yours (section 4).
 
 ### FastAPI
 
@@ -239,12 +241,11 @@ Without `INKWIRE_MEDIA_URL_BASE` (an absolute address) the GitHub store turns th
 
 ## 4. Verify
 
-From a checkout of this repo (Node 20+):
+Node 18+, no checkout needed:
 
 ```bash
-cd inkwire/conformance
-BASE_URL=https://www.example.com API_KEY=<full key> READONLY_KEY=<read-only key> node runner.mjs   # the API: every case for the advertised features
-BASE_URL=https://www.example.com API_KEY=<full key> node seo-runner.mjs                            # the page: SEO Profile 1 rendering
+npx inkwire-conformance https://www.example.com --key <full key> --readonly-key <read-only key> --seo
+# the API: every case for the advertised features; --seo also checks the page: SEO Profile 1 rendering
 ```
 
 Both write test entries (`external_id`s that start with `r` and a timestamp, or `seo-profile-`) to the site you point them at; run them against staging, or delete those entries afterwards.
@@ -258,6 +259,8 @@ In Anaella, add an Inkwire site with the site address and the **full key**. Give
 | `INKWIRE_API_KEYS` | none (all requests refused) | `full,other,audit:ro`, comma separated; `:ro` marks read-only |
 | `INKWIRE_SITE_URL` | `http://localhost:3000` | public address of the site |
 | `INKWIRE_SITE_NAME` | `This site` | shown in discovery |
+| `INKWIRE_SITE_DESCRIPTION`, `INKWIRE_SITE_LANGUAGE` | none | shown in discovery (language is a BCP 47 tag such as `en`) |
+| `INKWIRE_SCHEDULE` | off | set `true` only if your site renders nothing whose `published_at` is in the future; discovery then advertises `schedule` and clients show such entries as scheduled |
 | `INKWIRE_KINDS` | `post,page` | kinds the site holds (a folder each) |
 | `INKWIRE_ROOT` | `./content` | where the files live (file store) |
 | `INKWIRE_URL_TEMPLATE` | `{site}/{kind}/{slug}` | public address of an entry |
