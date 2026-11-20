@@ -207,3 +207,14 @@ def test_response_always_carries_the_version_header(api):
     failed = api.post("/api/content", json={})
     assert ok.headers["inkwire-version"] == "1"
     assert failed.headers["inkwire-version"] == "1"
+
+
+def test_url_template_from_the_environment(monkeypatch, tmp_path):
+    from tests.conftest import KEYS, Api, create_app
+
+    monkeypatch.setenv("INKWIRE_SITE_URL", "https://acme.test/")
+    monkeypatch.setenv("INKWIRE_URL_TEMPLATE", "{site}/{kind}/{slug}.html")
+    monkeypatch.setenv("INKWIRE_STORE", "memory")
+    api = Api(create_app(api_keys=KEYS))
+    body = api.post("/api/content", json={"external_id": "u1", "title": "Hello there", "markdown": "x"}).json()
+    assert body["url"] == "https://acme.test/post/hello-there.html"

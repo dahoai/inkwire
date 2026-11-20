@@ -137,7 +137,8 @@ describe("other outcomes", () => {
     const dir = project({ "requirements.txt": "fastapi\n" });
     const r = go(dir);
     assert.equal(r.code, 0);
-    assert.match(r.out, /pip install inkwire-receiver-core/);
+    assert.match(r.out, /pip install "inkwire-receiver-core\[fastapi\]"/);
+    assert.match(r.out, /uvicorn inkwire_receiver\.app:create_app --factory/);
     assert.equal(existsSync(path.join(dir, ".env")), false);
   });
   it("an unrecognised project exits non-zero with a clear message", () => {

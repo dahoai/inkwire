@@ -217,7 +217,7 @@ A collection over `content/post/*.md` (`glob` loader, `base: "./content/post"`) 
 
 ### FastAPI
 
-`create-inkwire` prints the manual steps: `pip install inkwire-receiver-core fastapi uvicorn`, copy the reference app from `inkwire/receivers/python-fastapi/app.py`, set `INKWIRE_API_KEYS`, `INKWIRE_KINDS`, `INKWIRE_ROOT`, and render the entries from the same `content/` folder with your own templates, applying the SEO rules above.
+`create-inkwire` prints the manual steps: `pip install "inkwire-receiver-core[fastapi]" uvicorn`, set `INKWIRE_API_KEYS`, `INKWIRE_KINDS`, `INKWIRE_ROOT`, `INKWIRE_SITE_URL` and `INKWIRE_URL_TEMPLATE` (`{site}`, `{kind}`, `{slug}`), then run `uvicorn inkwire_receiver.app:create_app --factory`. Render the entries from the same `content/` folder with your own templates, applying the SEO rules above. The Python receiver stores files (or memory); it has no GitHub store, so on a read-only host (Vercel, Netlify) use the Next.js or Express receiver instead, or a host with a persistent disk.
 
 ## 3. Deploying
 

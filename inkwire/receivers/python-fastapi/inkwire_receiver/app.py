@@ -9,6 +9,7 @@ Environment::
     INKWIRE_MEDIA_URL_BASE=/inkwire-media      # public base for uploaded files
     INKWIRE_SITE_NAME=Acme                     # discovery
     INKWIRE_SITE_URL=https://acme.com          # discovery + default entry URLs
+    INKWIRE_URL_TEMPLATE={site}/blog/{slug}    # entry URL; {site} {kind} {slug} (default /blog/<slug> for posts)
     INKWIRE_MARKDOWN_LIMIT_BYTES=1000000       # default 1 MB
     INKWIRE_MEDIA_LIMIT_BYTES=10000000         # default 10 MB
 """
@@ -67,6 +68,23 @@ def _build_store(media_url_base: str, media_limit: int):
     )
 
 
+def _env_url_for(site_url: str | None):
+    """``INKWIRE_URL_TEMPLATE`` (``{site}``, ``{kind}``, ``{slug}``), the same contract as the TS receivers."""
+    template = os.environ.get("INKWIRE_URL_TEMPLATE")
+    if not template:
+        return None
+    site = (site_url or "").rstrip("/")
+
+    def url_for(entry) -> str:
+        return (
+            template.replace("{site}", site)
+            .replace("{kind}", str(entry.get("kind", "post")))
+            .replace("{slug}", str(entry.get("slug", "")))
+        )
+
+    return url_for
+
+
 def _protocol_error(status: int, code: str, message: str) -> JSONResponse:
     return JSONResponse(
         status_code=status,
@@ -104,6 +122,7 @@ def create_app(
             kinds=_env_kinds(),
             limits=Limits(markdown_bytes=markdown_limit, media_bytes=media_limit),
             features=list(FEATURES),
+            url_for=_env_url_for(os.environ.get("INKWIRE_SITE_URL")),
         )
     if store is None:
         store = _build_store(media_url_base, media_limit)

@@ -169,13 +169,12 @@ export function run(argv, { log = (s) => process.stdout.write(s + "\n"), warn = 
   if (framework === "fastapi") {
     log(
       "FastAPI: there is no generator for it yet; the steps are manual.\n\n" +
-        "  1. pip install inkwire-receiver-core fastapi uvicorn\n" +
-        "  2. Copy the reference app (all routes, env contract, file store):\n" +
-        "       https://github.com/dahoai/inkwire/blob/master/inkwire/receivers/python-fastapi/app.py\n" +
-        "     or mount its handlers on your own FastAPI app the same way.\n" +
-        "  3. Environment: INKWIRE_API_KEYS=<full key>,<read-only key>:ro  INKWIRE_KINDS=post,page  INKWIRE_ROOT=./content\n" +
+        "  1. pip install \"inkwire-receiver-core[fastapi]\" uvicorn\n" +
+        "  2. Environment: INKWIRE_API_KEYS=<full key>,<read-only key>:ro  INKWIRE_KINDS=post,page  INKWIRE_ROOT=./content\n" +
+        "     INKWIRE_SITE_URL=https://your-site  INKWIRE_URL_TEMPLATE={site}/blog/{slug}\n" +
         "     Make the keys with: python3 -c \"import secrets; print(secrets.token_hex(24))\"\n" +
-        "  4. Run it, then check GET /api/inkwire with the key as a Bearer token.\n\n" +
+        "  3. Run the receiver (all routes, file store, media): uvicorn inkwire_receiver.app:create_app --factory\n" +
+        "  4. Check GET /api/inkwire with the key as a Bearer token.\n\n" +
         `Full walk-through: ${INSTALL_URL}`,
     );
     return 0;
