@@ -1,6 +1,6 @@
 {
   "name": "inkwire-receiver-core",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "description": "Shared TS core (validate, render, sanitize, read, edit, media, stores) for building an Inkwire receiver.",
   "license": "MIT",
@@ -27,7 +27,7 @@
     "markdown-it": "^14.1.0",
     "sanitize-html": "^2.13.1",
     "yaml": "^2.9.1",
-    "zod": "^3.23.8"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",
