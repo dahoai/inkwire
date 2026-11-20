@@ -1,22 +1,98 @@
+"""Markdown rendering + sanitizing, slug generation and the client-side ``edits`` helper."""
+
+from __future__ import annotations
+
 import re
-import markdown as md
+from typing import Iterable, Mapping
+
+import markdown as _markdown
 import nh3
-# Canonical allowlist per SPEC.md "Content safety": sanitize-html's default
-# allowedTags union {img, h1, h2} (h1/h2 already in the default set). Keep in
-# sync with core-ts/src/render.ts.
+
+from .errors import InkwireError
+
+SLUG_FALLBACK = "entry"
+MAX_SLUG_LENGTH = 255
+
+# Canonical allowlist, normative in SPEC.md "Content safety": sanitize-html's default
+# allowedTags unioned with `img` (h1/h2 are already in that default set). No more, no less.
 ALLOWED_TAGS = {
-    "a","abbr","address","article","aside","b","bdi","bdo","blockquote","br",
-    "caption","cite","code","col","colgroup","data","dd","dfn","div","dl","dt",
-    "em","figcaption","figure","footer","h1","h2","h3","h4","h5","h6","header",
-    "hgroup","hr","i","img","kbd","li","main","mark","menu","nav","ol","p",
-    "pre","q","rb","rp","rt","rtc","ruby","s","samp","section","small","span",
-    "strong","sub","sup","table","tbody","td","tfoot","th","thead","time","tr",
-    "u","ul","var","wbr",
+    "a", "abbr", "address", "article", "aside", "b", "bdi", "bdo", "blockquote", "br",
+    "caption", "cite", "code", "col", "colgroup", "data", "dd", "dfn", "div", "dl", "dt",
+    "em", "figcaption", "figure", "footer", "h1", "h2", "h3", "h4", "h5", "h6", "header",
+    "hgroup", "hr", "i", "img", "kbd", "li", "main", "mark", "menu", "nav", "ol", "p",
+    "pre", "q", "rb", "rp", "rt", "rtc", "ruby", "s", "samp", "section", "small", "span",
+    "strong", "sub", "sup", "table", "tbody", "td", "tfoot", "th", "thead", "time", "tr",
+    "u", "ul", "var", "wbr",
 }
-ALLOWED_ATTRS = {"a": {"href", "name", "rel"}, "img": {"src", "alt", "title"}}
+
+# Only `a` and `img` keep any attributes; every other tag is stripped of all of them.
+ALLOWED_ATTRIBUTES = {
+    "a": {"href", "name", "rel"},
+    "img": {"src", "alt", "title"},
+}
+
+ALLOWED_SCHEMES = {"http", "https", "mailto"}
+
+_MARKDOWN = _markdown.Markdown(extensions=["extra"], output_format="html")
+
+
 def render_markdown(text: str) -> str:
-    raw = md.markdown(text, extensions=["extra"])
-    return nh3.clean(raw, tags=ALLOWED_TAGS, attributes=ALLOWED_ATTRS, url_schemes={"http","https","mailto"}, link_rel=None)
-def slugify(s: str) -> str:
-    out = re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:255]
-    return out or "post"
+    """Markdown -> HTML, then sanitized with exactly the canonical allowlist."""
+    _MARKDOWN.reset()
+    raw = _MARKDOWN.convert(text or "")
+    return nh3.clean(
+        raw,
+        tags=ALLOWED_TAGS,
+        attributes=ALLOWED_ATTRIBUTES,
+        url_schemes=ALLOWED_SCHEMES,
+        clean_content_tags={"script", "style"},
+        link_rel=None,
+    )
+
+
+def slugify(value: str) -> str:
+    """Lowercase ASCII slug; the fallback is ``entry`` (not ``post``) so it reads kind-neutral."""
+    slug = re.sub(r"[^a-z0-9]+", "-", (value or "").lower()).strip("-")
+    return slug[:MAX_SLUG_LENGTH] or SLUG_FALLBACK
+
+
+def _preview(text: str, limit: int = 80) -> str:
+    shown = text.replace("\n", "\\n")
+    return shown if len(shown) <= limit else shown[: limit - 1] + "…"
+
+
+def edits(markdown: str, changes: Iterable[Mapping[str, str]]) -> str:
+    """Apply exact, exactly-once text replacements (the SDKs mirror this helper).
+
+    Each ``find`` must occur exactly once in the *current* markdown; a missing match raises
+    ``invalid_payload`` with ``edit_not_found: …`` and a repeated one ``edit_ambiguous: …``.
+    The receiver never merges text: the client computes the new body and PATCHes it whole.
+    """
+    current = markdown
+    for index, change in enumerate(changes):
+        find = change.get("find") if isinstance(change, Mapping) else None
+        replace = change.get("replace") if isinstance(change, Mapping) else None
+        if not isinstance(find, str) or find == "":
+            raise InkwireError("invalid_payload", f"edit_not_found: change {index} has an empty `find`")
+        if not isinstance(replace, str):
+            raise InkwireError("invalid_payload", f"edit_ambiguous: change {index} has no `replace`")
+        count = current.count(find)
+        if count == 0:
+            raise InkwireError("invalid_payload", f"edit_not_found: '{_preview(find)}' is not in the markdown")
+        if count > 1:
+            raise InkwireError(
+                "invalid_payload", f"edit_ambiguous: '{_preview(find)}' occurs {count} times"
+            )
+        current = current.replace(find, replace, 1)
+    return current
+
+
+__all__ = [
+    "ALLOWED_ATTRIBUTES",
+    "ALLOWED_SCHEMES",
+    "ALLOWED_TAGS",
+    "SLUG_FALLBACK",
+    "edits",
+    "render_markdown",
+    "slugify",
+]
