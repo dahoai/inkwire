@@ -122,6 +122,7 @@ for (const c of cases) {
   if (why) { skipped++; console.log(`SKIP ${c.name}: ${why}`); continue; }
   try {
     for (const step of c.setup ?? []) {
+      if (step.sleepMs) { await new Promise((r) => setTimeout(r, step.sleepMs)); continue; }
       const s = await call(step.method ?? "POST", step.endpoint ?? "/api/content", step);
       if (s.res.status !== (step.expect?.status ?? 200)) {
         throw new Error(`setup "${step.name ?? "?"}" -> ${s.res.status}`);

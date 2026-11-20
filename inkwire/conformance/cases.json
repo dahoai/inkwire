@@ -442,6 +442,40 @@
   }
  },
  {
+  "name": "list is newest first",
+  "feature": "list",
+  "setup": [
+   {
+    "body": {
+     "external_id": "{{run}}-o-1",
+     "title": "Order older",
+     "markdown": "{{run}}-order older",
+     "status": "published"
+    }
+   },
+   {
+    "sleepMs": 1100
+   },
+   {
+    "body": {
+     "external_id": "{{run}}-o-2",
+     "title": "Order newer",
+     "markdown": "{{run}}-order newer",
+     "status": "published"
+    }
+   }
+  ],
+  "method": "GET",
+  "endpoint": "/api/content?search={{run}}-order&limit=10",
+  "expect": {
+   "status": 200,
+   "path": {
+    "items.0.external_id": "{{run}}-o-2",
+    "items.1.external_id": "{{run}}-o-1"
+   }
+  }
+ },
+ {
   "name": "list search matches markdown",
   "feature": "list",
   "setup": [

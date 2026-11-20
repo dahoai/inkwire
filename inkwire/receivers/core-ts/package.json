@@ -34,5 +34,16 @@
     "@types/sanitize-html": "^2.13.0",
     "tsx": "^4.19.0",
     "typescript": "^5.5.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
+    },
+    "./package.json": "./package.json"
   }
 }

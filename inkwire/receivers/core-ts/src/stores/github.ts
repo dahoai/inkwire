@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { InkwireError } from "../errors.js";
 import { KIND_RE, RESERVED_KINDS, SLUG_FILE_RE, idFor, parseEntryFile, parseId, serializeEntry } from "../files.js";
-import { matches } from "../list.js";
+import { matches, pageOf, recencyKey } from "../list.js";
 import type { ContentStore, ListFilter, ListResult, MediaInput, SaveEntry, StoredContent, StoredMedia } from "../store.js";
 
 export interface GitHubStoreOptions {
@@ -166,40 +166,22 @@ export class GitHubStore implements ContentStore {
       if (filter.slug && m[2] !== filter.slug) continue;
       candidates.push({ kind: m[1]!, slug: m[2]!, sha: t.sha, path: t.path });
     }
-    candidates.sort((a, b) => (a.path < b.path ? -1 : 1));
-
-    // Cursor: the path of the last item returned. Entries are read in order until the page is full.
-    let after = "";
-    if (filter.cursor) {
-      try {
-        const v = JSON.parse(Buffer.from(filter.cursor, "base64url").toString("utf8"));
-        if (typeof v?.p !== "string") throw 0;
-        after = v.p;
-      } catch {
-        throw new InkwireError("invalid_payload", "cursor: not a cursor this receiver issued");
-      }
-    }
-    const rest = candidates.filter((c) => c.path > after);
-    const out: StoredContent[] = [];
-    let lastPath = "";
-    let more = false;
-    for (let i = 0; i < rest.length && !more; i += CONCURRENCY) {
-      const chunk = rest.slice(i, i + CONCURRENCY);
-      const loaded = await Promise.all(chunk.map((c) => this.fetchFile(c.kind, c.slug, c.sha)));
-      for (let j = 0; j < chunk.length; j++) {
-        const e = loaded[j];
+    // Newest first (SPEC: `updated_at` descending, ties by id), which needs every candidate read:
+    // a file's date is in its frontmatter and GitHub has no cheap mtime. Reads are cached by blob
+    // sha, so only files that changed since the last listing cost a request. A kind or slug
+    // filter narrows the candidates before any read.
+    const loaded: StoredContent[] = [];
+    for (let i = 0; i < candidates.length; i += CONCURRENCY) {
+      const chunk = candidates.slice(i, i + CONCURRENCY);
+      const entries = await Promise.all(chunk.map((c) => this.fetchFile(c.kind, c.slug, c.sha)));
+      for (const e of entries) {
         if (!e) continue;
         const withKey: StoredContent = { ...e, key };
-        if (!matches(withKey, filter)) continue;
-        if (out.length === filter.limit) {
-          more = true;
-          break;
-        }
-        out.push(withKey);
-        lastPath = chunk[j]!.path;
+        if (matches(withKey, filter)) loaded.push(withKey);
       }
     }
-    return { items: out, next_cursor: more && lastPath ? Buffer.from(JSON.stringify({ p: lastPath })).toString("base64url") : null };
+    loaded.sort((a, b) => (recencyKey(a) < recencyKey(b) ? -1 : 1));
+    return pageOf(loaded, recencyKey, filter.limit, filter.cursor);
   }
 
   private async shaAt(filePath: string): Promise<string | null> {

@@ -42,6 +42,7 @@ export type {
   StoredMedia,
   MediaInput,
 } from "./store.js";
+export { matches, pageOf, recencyKey, encodeCursor, decodeCursor } from "./list.js";
 export { MemoryStore } from "./stores/memory.js";
 export type { MemoryStoreOptions } from "./stores/memory.js";
 export { FileStore } from "./stores/file.js";

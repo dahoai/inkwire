@@ -157,7 +157,7 @@ receiver written before this section still conforms.
 { "items": [ ContentSummary ], "next_cursor": "opaque-or-null" }
 ```
 
-`limit` defaults to 20, at most 100. `cursor` is opaque: pass back `next_cursor` to get the next
+Entries come **newest first**: by `updated_at` descending, ties broken by `id`. `limit` defaults to 20, at most 100. `cursor` is opaque: pass back `next_cursor` to get the next
 page. `search` matches title, excerpt and markdown, case-insensitively. `tag` matches one tag.
 Drafts are listed to a caller who holds a key. `GET /api/content/{id}` returns the full entry.
 
