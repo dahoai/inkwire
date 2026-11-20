@@ -1,72 +1,64 @@
-# Inkwire Next.js Reference Receiver
+# Inkwire receiver for Next.js (App Router)
 
-This is the reference implementation of an Inkwire receiver in a Next.js App Router application.
+The reference receiver for Next.js: the Inkwire API as route handlers over [`inkwire-receiver-core`](../core-ts), with entries stored as markdown files (or committed to GitHub). To add it to your own site, run `npx create-inkwire` in your project; it copies these files. See [INSTALL.md](../../../INSTALL.md).
 
-## Overview
+## Routes
 
-The receiver is implemented as a single `POST /api/posts` route handler in `app/api/posts/route.ts`. It uses the shared `inkwire-receiver-core` module to handle all validation, authorization, and business logic.
-
-## Configuration
-
-### API Keys
-
-Set the `INKWIRE_API_KEYS` environment variable to a comma-separated list of valid API keys:
-
-```bash
-INKWIRE_API_KEYS=key1,key2,key3 npm run dev
+```
+app/api/content/route.ts          POST (create/upsert), GET (list)
+app/api/content/[id]/route.ts     GET (with ETag), PATCH (If-Match), DELETE
+app/api/media/route.ts            POST (multipart file, or JSON {url} fetched with an SSRF guard)
+app/api/inkwire/route.ts          GET discovery
+app/api/_inkwire/config.ts        keys, config and store, built from the environment on first use
+app/inkwire-media/[...path]/route.ts   serves uploaded images (file store)
 ```
 
-## Customization: Replacing MemoryStore
+Everything is `runtime = "nodejs"` and `force-dynamic`. There is no build-time work: a missing variable fails the request that needs it, not `next build`.
 
-This reference implementation uses `MemoryStore` from `inkwire-receiver-core` for simplicity. In a real application, you must provide your own `PostStore` implementation backed by your database.
+## Configuration (environment variables only)
 
-To adapt this for your app:
+| Variable | Default | |
+| --- | --- | --- |
+| `INKWIRE_API_KEYS` | none: every request is `401` | `full-key,audit-key:ro` |
+| `INKWIRE_SITE_URL` | `http://localhost:3000` | public address of the site |
+| `INKWIRE_SITE_NAME` | `This site` | |
+| `INKWIRE_KINDS` | `post,page` | |
+| `INKWIRE_URL_TEMPLATE` | `{site}/{kind}/{slug}` | public address of an entry |
+| `INKWIRE_MARKDOWN_LIMIT_BYTES` / `INKWIRE_MEDIA_LIMIT_BYTES` | 1,000,000 / 10,000,000 | `413` above |
+| `INKWIRE_STORE` | `file` (`github` when the repo and token are set) | `file`, `memory` or `github` |
+| `INKWIRE_ROOT` | `./content` | file store: `<root>/<kind>/<slug>.md`, uploads in `<root>/media` |
+| `INKWIRE_MEDIA_URL_BASE` | `/inkwire-media` | public base of uploads; keep `/inkwire-media` with the file store (that is where `app/inkwire-media` serves them) |
+| `INKWIRE_GITHUB_REPO`, `INKWIRE_GITHUB_TOKEN`, `INKWIRE_GITHUB_BRANCH`, `INKWIRE_GITHUB_DIR` | | switch to the GitHub store |
 
-1. Create a `PostStore` implementation that interfaces with your database. Every
-   method takes a `key` — the value `authorize()` resolved the caller's API key
-   to — so a single store can multi-tenant across sites/keys without them
-   colliding on slug or external_id:
-   ```typescript
-   import { type PostStore, type StoredPost, type UpsertInput } from "inkwire-receiver-core";
+## The two stores
 
-   export class MyPostStore implements PostStore {
-     async findByExternalId(key: string, externalId: string): Promise<StoredPost | null> {
-       // Your database logic here
-     }
+**File store (default).** One markdown file per entry with YAML frontmatter. Files that are already in `content/<kind>/` are listed and editable as they are (no frontmatter needed: the title comes from the first `# ` heading, `external_id` is `null`, status `published`). Needs a writable, persistent disk.
 
-     async findBySlug(key: string, slug: string): Promise<StoredPost | null> {
-       // Your database logic here
-     }
-
-     async upsert(key: string, post: UpsertInput): Promise<{ id: string; url: string; slug: string; created: boolean }> {
-       // Your database logic here
-     }
-   }
-   ```
-
-2. Replace `MemoryStore` in `app/api/posts/route.ts`:
-   ```typescript
-   const store: PostStore = new MyPostStore();
-   ```
-
-This is exactly the pattern used in the DadSEO integration (Task 9).
-
-## Running
+**GitHub store.** Entries are committed to a repo through the contents API; the ETag is the file's blob sha. Use it wherever the filesystem is read-only. **On Vercel you must use it.** The exact block:
 
 ```bash
-npm install
-INKWIRE_API_KEYS=secret-key npm run dev
+INKWIRE_API_KEYS=<full key>,<read-only key>:ro
+INKWIRE_SITE_URL=https://www.example.com
+INKWIRE_GITHUB_REPO=your-org/your-site
+INKWIRE_GITHUB_TOKEN=github_pat_...      # contents: read and write on that repo only
+INKWIRE_GITHUB_BRANCH=main               # default
+INKWIRE_GITHUB_DIR=content               # default
+INKWIRE_URL_TEMPLATE={site}/blog/{slug}
+INKWIRE_MEDIA_URL_BASE=https://www.example.com/content-media   # only if <dir>/media is served there; otherwise media is off
 ```
 
-The server runs on port 4001 by default.
+Setting the repo without the token (or the reverse) throws at the first request instead of falling back to disk. The GitHub store has only been exercised against a mocked GitHub API.
 
-## Testing
+## Rendering the entries
 
-Run the conformance test suite:
+The API does not render pages. `examples/blog/[slug]/page.tsx` is a page that passes SEO rendering conformance (`generateMetadata` plus BlogPosting JSON-LD); copy it to `app/blog/[slug]/page.tsx`. It is outside `app/` so it does not become a route here.
+
+## Run and test
 
 ```bash
-cd ../../conformance
-BASE_URL=http://127.0.0.1:4001 API_KEY=secret-key node runner.mjs
+cd ../core-ts && npm install && npm run build   # once: this package depends on it
+cd ../nextjs && npm install
+npm run conformance      # next build, next start on a free port, the shared runner: 56 passed
 ```
 
-All conformance cases must pass.
+`npm run dev` / `npm start` serve on port 4001. The conformance script preloads a small stub (`../node-express/test/media-stub.cjs`) that answers the one fake host the runner's fetch-by-URL case asks for; the receiver code itself is untouched.

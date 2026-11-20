@@ -5,7 +5,26 @@
 [![Receiver PyPI](https://img.shields.io/pypi/v/inkwire-receiver-core.svg)](https://pypi.org/project/inkwire-receiver-core/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A small, open protocol for publishing **and editing** content (blog posts, pages, docs) on any receiving website — REST + JSON, upsert semantics, server-side sanitization, portable SEO defaults, and a full read/edit/delete/media surface an agent can work with.
+**Let your agent publish and edit any site.** Inkwire is a small, open protocol (REST + JSON) for publishing **and editing** content (blog posts, pages, docs) on a receiving website: upsert by `external_id`, list/read/edit/delete with `ETag`/`If-Match`, image upload, server-side sanitization, portable SEO defaults, and read-only keys for audits. The receiver is a drop-in: one command adds it to your site.
+
+## Add it to your site (about two minutes)
+
+Paste this into Cursor, Claude Code or any coding agent opened on your site's repo:
+
+```text
+Add an Inkwire receiver to this site so my agent can publish and edit its content.
+Run `npx create-inkwire --yes`, then follow https://github.com/dahoai/inkwire/blob/master/INSTALL.md
+to render published entries with SEO tags, and check /api/inkwire answers.
+```
+
+or do it yourself:
+
+```bash
+cd my-site            # Next.js (App Router) or Express; FastAPI prints manual steps
+npx create-inkwire    # writes the routes, adds the dependency, generates two keys (full + read-only), prints them once
+```
+
+**[INSTALL.md](INSTALL.md)** is the full walk-through for people and agents: per-framework notes (Next.js, Express, Astro, FastAPI), SEO page snippets that pass the rendering gate, the Vercel/GitHub-store setup, every environment variable, and how to verify. [`llms.txt`](llms.txt) is the same map for an agent that just landed in this repo.
 
 ```
 POST /api/content
@@ -15,27 +34,31 @@ Content-Type: application/json
 { "external_id": "gen-2026-07-22-abc", "title": "...", "markdown": "..." }
 ```
 
-The full wire contract is in [`inkwire/SPEC.md`](inkwire/SPEC.md); [`inkwire/schema/inkwire-post.schema.json`](inkwire/schema/inkwire-post.schema.json) is the authoritative machine-readable schema where prose and schema disagree.
+The full wire contract is in [`inkwire/SPEC.md`](inkwire/SPEC.md); the schemas in [`inkwire/schema/`](inkwire/schema/) (`inkwire-content.schema.json` for create, `inkwire-patch.schema.json`, `inkwire-media.schema.json`, `inkwire-discovery.schema.json`) are authoritative where prose and schema disagree.
 
 ## Why
 
-Every CMS speaks a different API. Every site that wants to *receive* posts (a marketing site, a docs site, a landing page) has to write a bespoke integration for each one. Inkwire is the opposite: one small contract a receiver implements once, and any publisher can target.
+Every CMS speaks a different API. Every site that wants to *receive* posts (a marketing site, a docs site, a landing page) has to write a bespoke integration for each one, and none of them let an agent come back later to fix a typo. Inkwire is the opposite: one small contract a receiver implements once, and any publisher or agent can target.
 
 ## Repository layout
 
 ```
+INSTALL.md                       how to add Inkwire to a site (human + agent)
+llms.txt                         the repo map for an agent that just landed here
+packages/
+  create-inkwire/                `npx create-inkwire`: detects the framework, writes the receiver, makes the keys
 inkwire/
   SPEC.md                        protocol spec (source of truth alongside the schema)
   schema/                        JSON Schema + validation examples/tests
-  conformance/                   black-box test suite (cases.json + runner.mjs) — the gate for any receiver
+  conformance/                   black-box suites: runner.mjs + cases.json (the API gate), seo-runner.mjs (rendered pages)
   receivers/
-    core-ts/                     shared TS core (validate → render → sanitize → upsert) — the "real" implementation
-    node-express/                thin Express adapter over core-ts
-    nextjs/                      thin Next.js App Router adapter over core-ts
+    core-ts/                     shared TS core (validate, render, sanitize, stores: file, GitHub, memory): the "real" implementation
+    node-express/                the whole API as one Express router over core-ts
+    nextjs/                      the whole API as Next.js App Router routes over core-ts (+ a conformant blog page example)
     python-fastapi/              independent Python core + FastAPI adapter, mirrors core-ts field-for-field
   clients/
-    node/                        Node publish() client — idempotency, retry/backoff, typed errors
-    python/                      Python publish() client — same behavior
+    node/                        Node client (publish, and the read/edit surface in newer versions)
+    python/                      Python client, same behavior
 ```
 
 A **receiver** is anything that implements the Inkwire wire contract per the spec (the only required endpoint is `POST /api/content`); `core-ts` and the Python core are reference implementations, not the only way to build one. A **client** is a thin wrapper for calling a receiver from a publisher.
@@ -52,29 +75,23 @@ A **receiver** is anything that implements the Inkwire wire contract per the spe
 
 ## Try it
 
-Pick a receiver and run its conformance check — this is the actual gate every receiver must pass, not just a smoke test:
+Run a reference receiver and its conformance check. This is the actual gate every receiver must pass, not a smoke test:
 
 ```bash
-# 1. Start any receiver, e.g. the Express one:
+# 1. Build the core, then run the Express receiver (file store in ./content):
 cd inkwire/receivers/core-ts && npm install && npm run build
 cd ../node-express && npm install
 INKWIRE_API_KEYS=dev-key,audit-key:ro npm start &
 
-# 2. Run the conformance suite against it. The runner reads discovery and runs every case for
-#    the features the receiver advertises (upsert, list/get, patch + If-Match, delete, media,
-#    read-only keys, limits):
+# 2. Run the suite against it. The runner reads discovery and runs every case for the features the
+#    receiver advertises (upsert, list/get, patch + If-Match, delete, media, read-only keys, limits):
 cd ../../conformance && npm install
 BASE_URL=http://localhost:4000 API_KEY=dev-key READONLY_KEY=audit-key node runner.mjs
 ```
 
-Same runner works unmodified against `receivers/nextjs` or `receivers/python-fastapi` — that's the point of a black-box conformance suite.
+Or in one step, `npm run conformance` in `inkwire/receivers/node-express`, `inkwire/receivers/nextjs` or `inkwire/receivers/core-ts` starts the receiver on a free port, runs the runner and stops it. The same runner works unmodified against `receivers/python-fastapi`: that is the point of a black-box suite.
 
-The black-box runner proves SEO wire validation. Receiver-core unit tests must
-also prove that effective SEO metadata reaches the application-owned store.
-
-Sites that publicly render returned post URLs can separately run `seo-runner.mjs`
-to verify SEO Profile 1 page output. The demo receivers only implement the
-receiver API, so they claim input conformance but not rendered-page conformance.
+The runner proves the API. Receiver-core unit tests must also prove that effective SEO metadata reaches the store. A site that renders returned URLs publicly can additionally run `seo-runner.mjs` to verify SEO Profile 1 page output (title, description, canonical, Open Graph, Twitter, robots, BlogPosting JSON-LD). The receivers themselves only implement the API, so they claim input conformance; the page examples in INSTALL.md (`nextjs/examples`, `node-express/examples`) are what pass the rendering gate.
 
 ```bash
 BASE_URL=https://site.example API_KEY=site-key node seo-runner.mjs
@@ -116,7 +133,7 @@ publish("http://localhost:3000", "dev-key", {
 
 ## Status
 
-v1 (revised in place in November 2026 before adoption: the resource is `/api/content` with a `kind` field, and read/edit/delete/media/discovery were added): frozen schema, feature-gated conformance suite, reference receivers (Express, Next.js, FastAPI) sharing one contract, two client SDKs. Published: `inkwire-client` on [npm](https://www.npmjs.com/package/inkwire-client) and [PyPI](https://pypi.org/project/inkwire-client/), and `inkwire-receiver-core` on [npm](https://www.npmjs.com/package/inkwire-receiver-core) and [PyPI](https://pypi.org/project/inkwire-receiver-core/). The SDKs and reference receivers are being updated to the revised contract now.
+v1 (revised in place in November 2026 before adoption: the resource is `/api/content` with a `kind` field, and read/edit/delete/media/discovery were added): frozen schema, feature-gated conformance suite, reference receivers (Express, Next.js, FastAPI) sharing one contract, a one-command installer (`create-inkwire`, unpublished), two client SDKs. Published: `inkwire-client` on [npm](https://www.npmjs.com/package/inkwire-client) and [PyPI](https://pypi.org/project/inkwire-client/), and `inkwire-receiver-core` on [npm](https://www.npmjs.com/package/inkwire-receiver-core) and [PyPI](https://pypi.org/project/inkwire-receiver-core/). The SDKs and reference receivers are being updated to the revised contract now.
 
 ## License
 
