@@ -20,6 +20,7 @@ Idempotency-Key: gen-2026-07-22-abc        # optional; defaults to external_id
 ```jsonc
 {
   "external_id": "gen-2026-07-22-abc",   // REQUIRED. Stable caller id. Upsert key.
+  "kind": "post",                         // optional. "post" (default) or "page", if the receiver holds pages.
   "title": "How we cut audit time 40%",  // REQUIRED.
   "markdown": "# Body...\n\nText.",       // REQUIRED. Canonical content.
   "slug": "cut-audit-time",               // optional. Receiver finalizes/dedupes.
@@ -60,7 +61,8 @@ Response header: `Inkwire-Version: 1`.
 
 - **Upsert on `external_id`, scoped to the site/key.** Re-POST the same
   `external_id` → update in place (never duplicate). This is both idempotency and
-  the "update" operation. No separate PUT in v1.
+  the "update" operation for callers that hold the whole post. To change part of an
+  existing post, or a post the receiver already had, use `PATCH` (see Reading and editing).
 - **Slug:** if `slug` is **omitted**, the receiver generates one (slugify title)
   and silently de-duplicates collisions (e.g. `-2` suffix) — never a 409. If the
   caller **explicitly provides** a `slug` that a *different* `external_id` already
@@ -115,6 +117,88 @@ caller-controlled text cannot terminate its `<script>` element. Additional
 site-wide metadata is allowed. Draft posts remain non-public under the base
 protocol and cannot claim rendering conformance.
 
+### Reading and editing
+
+`POST /api/posts` is the only endpoint a receiver must implement. A receiver may also
+implement the endpoints below; each one is a **feature** it advertises in discovery, so a
+publisher never guesses. Everything here is optional for the receiver and additive to the
+publish contract above.
+
+Posts are addressed by the receiver's own `id` (the `id` in the publish response). A post the
+site already had, or wrote by hand, has an `id` too and a `null` `external_id`: it can be read
+and edited like any other. That is what makes an existing site auditable.
+
+#### Discovery: `GET /api/inkwire`
+
+```json
+{
+  "inkwire": 1,
+  "site": { "name": "Acme", "url": "https://acme.com" },
+  "features": ["upsert", "list", "get", "update", "delete", "media"],
+  "kinds": ["post"],
+  "limits": { "markdown_bytes": 1000000, "media_bytes": 10000000 }
+}
+```
+
+Same bearer auth. `upsert` is always present. A receiver without this endpoint answers 404 and
+clients treat it as `["upsert"]`, so every receiver written before this section still conforms.
+`kinds` lists the content kinds it holds (`"post"`, and optionally `"page"`).
+
+#### Reading: `GET /api/posts`, `GET /api/posts/{id}`  (features `list`, `get`)
+
+`GET /api/posts?status=&kind=&tag=&search=&external_id=&slug=&limit=&cursor=` returns
+
+```json
+{ "items": [ PostSummary ], "next_cursor": "opaque-or-null" }
+```
+
+`limit` defaults to 20, at most 100. `cursor` is opaque. `search` matches title, excerpt and
+markdown, case-insensitively. Drafts are listed to a caller who holds a key. `GET /api/posts/{id}`
+returns the full post.
+
+`PostSummary`: `id`, `external_id` (or `null`), `kind`, `title`, `slug`, `url`, `status`,
+`excerpt`, `tags`, `published_at`, `updated_at`. The full post adds `markdown`, `cover_image_url`,
+`canonical_url`, `author`, and `seo`, which holds the **effective** values (the overrides applied
+over the derived defaults from SEO Profile 1: `title`, `description`, `image_url`, `noindex`).
+Every single-post response carries an `ETag`.
+
+#### Editing: `PATCH /api/posts/{id}`  (feature `update`)
+
+Body: any subset of the publish fields (`title`, `markdown`, `slug`, `excerpt`, `tags`,
+`cover_image_url`, `canonical_url`, `seo`, `author`, `status`, `published_at`). Given fields
+replace the stored value; omitted fields keep theirs; `null` clears an optional field. `seo` is
+merged per key. `external_id` cannot be changed. A new `slug` follows the publish rules (409 if a
+different post owns it) and changes the post's URL.
+
+Send `If-Match: <etag>` from the read the edit is based on. If the post changed since, the answer
+is `412 stale` and nothing is written, so two editors never overwrite each other. Receivers that
+advertise `update` MUST honour `If-Match`.
+
+Text edits are computed by the client: fetch the post, replace the exact passage in `markdown`
+(the SDKs have an `edits` helper that requires each `find` to match exactly once), `PATCH` the
+whole `markdown` with `If-Match`. The receiver never has to merge text.
+
+The response is the full updated post with its new `ETag`.
+
+#### Deleting: `DELETE /api/posts/{id}`  (feature `delete`)
+
+Removes the post from the public site. A receiver may keep it internally (trash, or `draft`), but
+it must stop being public. Honours `If-Match`. Response: `{ "id": "...", "deleted": true }`.
+
+#### Media: `POST /api/media`  (feature `media`)
+
+Either `multipart/form-data` with a `file` part, or JSON `{ "url": "https://...", "alt": "..." }`
+for the receiver to fetch (SSRF-guarded: public `http(s)` hosts only). Optional `alt`. Response:
+`{ "id": "...", "url": "https://site/uploads/x.jpg", "alt": "..." }`. Use `url` in markdown or as
+`cover_image_url`. Only images (`jpeg`, `png`, `gif`, `webp`, `avif`; never SVG) up to
+`limits.media_bytes`. A site with nowhere to store files omits the feature: `cover_image_url` and
+markdown images keep working with any public URL.
+
+#### Read-only keys
+
+A receiver may mark a key read-only. It can call every `GET`; any call that writes answers
+`403 forbidden`. Handy for letting an agent audit a site before it may change it.
+
 ### Errors
 
 ```json
@@ -125,14 +209,18 @@ protocol and cannot claim rendering conformance.
 | --- | --- | --- |
 | 400 | `invalid_payload` | Missing/invalid required fields. |
 | 401 | `unauthorized` | Missing/bad API key. |
-| 409 | `conflict` | Requested `slug` already used by a *different* `external_id`. |
+| 403 | `forbidden` | The key is read-only and the call writes. |
+| 404 | `not_found` | No post (or media) with that `id`. |
+| 409 | `conflict` | Requested `slug` already used by a *different* post. |
+| 412 | `stale` | `If-Match` no longer matches: the post changed since the caller read it. |
+| 413 | `too_large` | Body or upload over the receiver's `limits`. |
 | 429 | `rate_limited` | Per-key rate limit exceeded. |
 | 500 | `internal` | Receiver/storage failure. |
 
 ### Versioning
 
 `Inkwire-Version: 1`. Only additive changes within v1 (new optional
-fields). Breaking changes bump to `/api/posts` v2 (path or header negotiated).
+fields, new optional endpoints advertised by discovery). Breaking changes bump to `/api/posts` v2 (path or header negotiated).
 
 ---
 
