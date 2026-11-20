@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { InkwireError } from "../errors.js";
-import { KIND_RE, RESERVED_KINDS, SLUG_FILE_RE, idFor, parseEntryFile, parseId, serializeEntry } from "../files.js";
+import { KIND_RE, RESERVED_KINDS, SLUG_FILE_RE, idFor, parseEntryFile, parseId, serializeEntry, updateEntryFile } from "../files.js";
 import { matches, pageMedia, pageOf, recencyKey } from "../list.js";
 import { MEDIA_FILE_RE, MEDIA_ID_RE, META_SUFFIX, type MediaMeta, parseMeta, patchMeta, serializeMeta, toMedia } from "../media-meta.js";
 import type { ContentStore, ListFilter, ListResult, MediaInput, MediaListFilter, MediaListResult, SaveEntry, StoredContent, StoredMedia } from "../store.js";
@@ -131,16 +131,27 @@ export class GitHubStore implements ContentStore {
     if (json.type && json.type !== "file") return null;
     const sha = json.sha ?? "";
     if (sha && this.cache.has(sha)) return this.cache.get(sha) ?? null;
-    let raw: string;
+    return this.parse(await this.decode(json), kind, slug, sha);
+  }
+
+  private async decode(json: { sha?: string; content?: string; encoding?: string }): Promise<string> {
     if (json.encoding === "base64" && typeof json.content === "string" && json.content !== "") {
-      raw = Buffer.from(json.content, "base64").toString("utf8");
-    } else {
-      // Files over 1 MB come back without content: read the blob instead.
-      const blob = await this.gh("GET", `/git/blobs/${encodeURIComponent(sha)}`, undefined, "application/vnd.github.raw+json");
-      if (!blob.ok) throw await this.failure(blob, "reading an entry");
-      raw = await blob.text();
+      return Buffer.from(json.content, "base64").toString("utf8");
     }
-    return this.parse(raw, kind, slug, sha);
+    // Files over 1 MB come back without content: read the blob instead.
+    const blob = await this.gh("GET", `/git/blobs/${encodeURIComponent(json.sha ?? "")}`, undefined, "application/vnd.github.raw+json");
+    if (!blob.ok) throw await this.failure(blob, "reading an entry");
+    return blob.text();
+  }
+
+  /** A file's current text and blob sha, or null when it does not exist. */
+  private async rawAt(filePath: string): Promise<{ sha: string; raw: string } | null> {
+    const res = await this.gh("GET", `/contents/${encodePath(filePath)}?ref=${encodeURIComponent(this.o.branch)}`);
+    if (res.status === 404) return null;
+    if (!res.ok) throw await this.failure(res, "checking a file");
+    const json = (await res.json()) as { sha?: string; content?: string; encoding?: string; type?: string };
+    if (json.type && json.type !== "file") return null;
+    return { sha: json.sha ?? "", raw: await this.decode(json) };
   }
 
   async get(key: string, id: string) {
@@ -197,14 +208,19 @@ export class GitHubStore implements ContentStore {
   async save(key: string, entry: SaveEntry): Promise<StoredContent> {
     const filePath = this.pathFor(entry.kind, entry.slug);
     const newId = idFor(entry.kind, entry.slug);
-    const existingSha = await this.shaAt(filePath);
-    if (existingSha && entry.id !== newId) throw new InkwireError("conflict", `${entry.kind}/${entry.slug}.md already exists`);
+    const existing = await this.rawAt(filePath);
+    if (existing && entry.id !== newId) throw new InkwireError("conflict", `${entry.kind}/${entry.slug}.md already exists`);
+    // An edit of an existing file changes only what changed in it (its own frontmatter keys survive).
+    const old = entry.id ? parseId(entry.id) : null;
+    const previous = !old ? null : entry.id === newId ? existing : await this.rawAt(this.pathFor(old.kind, old.slug));
+    const before = previous && old ? this.parse(previous.raw, old.kind, old.slug, previous.sha) : null;
+    const text = (previous && before && updateEntryFile(previous.raw, before, entry)) || serializeEntry(entry);
     const action = entry.id ? "update" : "create";
     const res = await this.gh("PUT", `/contents/${encodePath(filePath)}`, {
       message: `inkwire: ${action} ${entry.kind}/${entry.slug}`,
-      content: b64(serializeEntry(entry)),
+      content: b64(text),
       branch: this.o.branch,
-      ...(existingSha ? { sha: existingSha } : {}),
+      ...(existing ? { sha: existing.sha } : {}),
     });
     if (!res.ok) throw await this.failure(res, "saving an entry");
     const j = (await res.json()) as { content?: { sha?: string } };

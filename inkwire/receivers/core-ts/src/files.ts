@@ -1,4 +1,5 @@
-import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { isDeepStrictEqual } from "node:util";
+import { isMap, parse as parseYaml, parseDocument, stringify as stringifyYaml } from "yaml";
 import { renderMarkdown } from "./render.js";
 import type { SeoOverrides, StoredContent } from "./store.js";
 
@@ -142,9 +143,59 @@ export function parseEntryFile(
     ...(canonical ? { canonical_url: canonical } : {}),
     seo: Object.keys(seo).length ? seo : null,
     ...(author && Object.keys(author).length ? { author } : {}),
-    status: fm.status === "draft" ? "draft" : "published",
-    published_at: iso(fm.published_at) ?? iso(fm.date) ?? where.mtimeIso,
-    updated_at: iso(fm.updated_at) ?? where.mtimeIso,
+    // Hugo, Astro and Jekyll mark drafts with `draft: true` or `published: false`.
+    status: fm.status === "draft" || fm.draft === true || fm.published === false ? "draft" : "published",
+    published_at: iso(fm.published_at) ?? iso(fm.date) ?? iso(fm.pubDate) ?? where.mtimeIso,
+    updated_at: iso(fm.updated_at) ?? iso(fm.lastmod) ?? where.mtimeIso,
     version: typeof fm.version === "number" && Number.isInteger(fm.version) && fm.version >= 1 ? fm.version : 1,
   };
+}
+
+/** Key names a hand-written file may use for a field, canonical first (the order `parseEntryFile` reads them). */
+const ALIASES = {
+  excerpt: ["excerpt", "description"],
+  categories: ["categories", "category"],
+  published_at: ["published_at", "date", "pubDate"],
+  updated_at: ["updated_at", "lastmod"],
+} as const;
+
+/**
+ * Saves an edit into an existing file without rewriting what it did not change: every frontmatter
+ * key the receiver does not manage (`layout`, `heroImage`, `weight`...), comments and key order all
+ * survive, and a field the file spells its own way (`date`, `lastmod`, `description`, `draft`) is
+ * updated under that spelling. `before` is what the file parsed to, `after` what to store.
+ * Returns null when the file has no usable frontmatter: the caller writes a fresh one.
+ */
+export function updateEntryFile(previousRaw: string, before: Draft, after: Draft): string | null {
+  const m = FM.exec(previousRaw.replace(/^\uFEFF/, ""));
+  if (!m) return null;
+  const doc = parseDocument(m[1]!);
+  if (doc.errors.length || !isMap(doc.contents)) return null;
+
+  const changed = (k: keyof Draft) => !isDeepStrictEqual(before[k], after[k]);
+  const put = (k: string, v: unknown, aliases: readonly string[] = [k]) => {
+    if (v === undefined || v === null) for (const a of aliases) doc.delete(a);
+    else doc.set(aliases.find((a) => doc.has(a)) ?? k, v);
+  };
+
+  if (changed("title")) doc.set("title", after.title);
+  if (changed("external_id")) put("external_id", after.external_id);
+  if (changed("status")) {
+    const draft = after.status === "draft";
+    const own = ["draft", "published", "status"].filter((k) => doc.has(k));
+    if (own.length === 0) own.push("status");
+    for (const k of own) doc.set(k, k === "draft" ? draft : k === "published" ? !draft : after.status);
+  }
+  for (const k of ["tags", "cover_image_url", "cover_image_alt", "canonical_url", "author", "version"] as const) {
+    if (changed(k)) put(k, after[k]);
+  }
+  for (const k of ["excerpt", "categories", "published_at", "updated_at"] as const) {
+    if (changed(k)) put(k, after[k], ALIASES[k]);
+  }
+  if (changed("seo")) put("seo", after.seo && Object.keys(after.seo).length ? after.seo : undefined);
+  // kind and slug come from the path; a file that spells them out keeps them true.
+  if (doc.has("slug") && changed("slug")) doc.set("slug", after.slug);
+  if (doc.has("kind") && changed("kind")) doc.set("kind", after.kind);
+
+  return `---\n${doc.toString({ lineWidth: 0 }).trimEnd()}\n---\n\n${after.markdown}\n`;
 }

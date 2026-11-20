@@ -20,7 +20,8 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --import tsx --test \"test/*.test.ts\"",
-    "conformance": "npm run build && node test/run-conformance.mjs"
+    "conformance": "npm run build && node test/run-conformance.mjs",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "markdown-it": "^14.1.0",

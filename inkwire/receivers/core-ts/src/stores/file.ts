@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { InkwireError } from "../errors.js";
-import { KIND_RE, RESERVED_KINDS, SLUG_FILE_RE, idFor, parseEntryFile, parseId, serializeEntry } from "../files.js";
+import { KIND_RE, RESERVED_KINDS, SLUG_FILE_RE, idFor, parseEntryFile, parseId, serializeEntry, updateEntryFile } from "../files.js";
 import { matches, pageMedia, pageOf, recencyKey } from "../list.js";
 import { MEDIA_FILE_RE, MEDIA_ID_RE, META_SUFFIX, type MediaMeta, parseMeta, patchMeta, serializeMeta, toMedia } from "../media-meta.js";
 import type { ContentStore, ListFilter, ListResult, MediaInput, MediaListFilter, MediaListResult, SaveEntry, StoredContent, StoredMedia } from "../store.js";
@@ -126,9 +126,17 @@ export class FileStore implements ContentStore {
       if (taken) throw new InkwireError("conflict", `${entry.kind}/${entry.slug}.md already exists`);
     }
     await mkdir(path.dirname(file), { recursive: true });
+    // An edit of an existing file changes only what changed in it (its own frontmatter keys survive).
+    const old = entry.id ? parseId(entry.id) : null;
+    let text: string | null = null;
+    if (old) {
+      const before = await this.read(old.kind, old.slug).catch(() => null);
+      const raw = before ? await readFile(this.fileFor(old.kind, old.slug), "utf8").catch(() => null) : null;
+      if (before && raw !== null) text = updateEntryFile(raw, before, entry);
+    }
     const tmp = path.join(path.dirname(file), `.${entry.slug}.${randomBytes(6).toString("hex")}.tmp`);
     try {
-      await writeFile(tmp, serializeEntry(entry), { encoding: "utf8", mode: 0o644 });
+      await writeFile(tmp, text ?? serializeEntry(entry), { encoding: "utf8", mode: 0o644 });
       await rename(tmp, file);
     } catch (e) {
       await unlink(tmp).catch(() => {});

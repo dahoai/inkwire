@@ -68,11 +68,17 @@ MEDIA_ID_RE = re.compile(r"[0-9a-f]{16}")
 MEDIA_SIDECAR = ".meta.json"
 
 
-def split_frontmatter(text: str) -> tuple[dict, str]:
+class _BadFrontmatter(ValueError):
+    """The file opens with a frontmatter block that is not a YAML mapping."""
+
+
+def split_frontmatter(text: str, *, strict: bool = False) -> tuple[dict, str]:
     """``("---\\ntitle: x\\n---\\n\\nbody")`` -> ``({"title": "x"}, "body")``; tolerant of absence.
 
     Exactly one newline after the closing fence (the blank separator line) is dropped so a
     written entry reads back byte-for-byte; any further leading newlines belong to the body.
+    ``strict`` raises ``_BadFrontmatter`` for a block that is not valid YAML (the store hides such
+    files rather than guess at them).
     """
     match = FRONTMATTER.match(text)
     if not match:
@@ -80,8 +86,14 @@ def split_frontmatter(text: str) -> tuple[dict, str]:
     try:
         data = yaml.safe_load(match.group(1))
     except yaml.YAMLError:
+        if strict:
+            raise _BadFrontmatter() from None
         return {}, text
+    if data is None:
+        data = {}
     if not isinstance(data, dict):
+        if strict:
+            raise _BadFrontmatter()
         return {}, text
     body = text[match.end() :]
     if body.startswith("\r\n"):
@@ -91,15 +103,24 @@ def split_frontmatter(text: str) -> tuple[dict, str]:
     return data, body
 
 
+_DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_NO_ZONE = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$")
+
+
 def _iso(value: Any) -> str | None:
-    """Frontmatter dates come back as ``date``/``datetime`` objects from PyYAML."""
-    if isinstance(value, str):
-        return value
+    """A frontmatter date as ISO-8601 with an offset: date-only and zone-less values are read as UTC."""
     if isinstance(value, datetime):
         moment = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
         return moment.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
     if isinstance(value, date):
-        return value.isoformat()
+        return f"{value.isoformat()}T00:00:00.000Z"
+    if isinstance(value, str):
+        text = value.strip()
+        if _DATE_ONLY.match(text):
+            return f"{text}T00:00:00.000Z"
+        if _NO_ZONE.match(text):
+            return f"{text.replace(' ', 'T')}Z"
+        return text or None
     return None
 
 
@@ -119,6 +140,64 @@ def _tags(value: Any) -> list[str] | None:
     if isinstance(value, (list, tuple)):
         return [str(tag) for tag in value]
     return None
+
+
+_ALIASES = {
+    "excerpt": ("excerpt", "description"),
+    "categories": ("categories", "category"),
+    "published_at": ("published_at", "date", "pubDate"),
+    "updated_at": ("updated_at", "lastmod"),
+}
+
+
+def _norm(value: Any) -> Any:
+    return None if value in (None, [], {}) else value
+
+
+def _edit_text(previous_raw: str, before: StoredContent, after: StoredContent) -> str | None:
+    """Saves an edit into an existing file without rewriting what it did not change.
+
+    Every frontmatter key the receiver does not manage (``layout``, ``heroImage``, ``weight``...)
+    survives, and a field the file spells its own way (``date``, ``lastmod``, ``description``,
+    ``draft``) is updated under that spelling. Key order is kept; YAML comments are not (PyYAML).
+    Returns ``None`` when the file has no usable frontmatter: the caller writes a fresh one.
+    """
+    if not FRONTMATTER.match(previous_raw):
+        return None
+    try:
+        front, _ = split_frontmatter(previous_raw, strict=True)
+    except _BadFrontmatter:
+        return None
+
+    def changed(name: str) -> bool:
+        return _norm(before.get(name)) != _norm(after.get(name))
+
+    def put(name: str, value: Any) -> None:
+        names = _ALIASES.get(name, (name,))
+        if _norm(value) is None:
+            for alias in names:
+                front.pop(alias, None)
+        else:
+            front[next((alias for alias in names if alias in front), name)] = value
+
+    if changed("title"):
+        front["title"] = after["title"]
+    if changed("status"):
+        draft = after["status"] == "draft"
+        own = [name for name in ("draft", "published", "status") if name in front] or ["status"]
+        for name in own:
+            front[name] = draft if name == "draft" else (not draft) if name == "published" else after["status"]
+    for name in ("external_id", "tags", "cover_image_url", "cover_image_alt", "canonical_url", "author", "version",
+                 "excerpt", "categories", "published_at", "updated_at", "seo"):
+        if changed(name):
+            put(name, after.get(name))
+    # kind and slug come from the path; a file that spells them out keeps them true.
+    for name in ("slug", "kind"):
+        if name in front and changed(name):
+            front[name] = after[name]
+
+    dumped = yaml.safe_dump(front, allow_unicode=True, sort_keys=False, default_flow_style=False).strip()
+    return f"---\n{dumped}\n---\n\n{after.get('markdown') or ''}"
 
 
 class FileStore:
@@ -162,9 +241,12 @@ class FileStore:
 
     # --- reading ----------------------------------------------------------
 
-    def _read(self, path: Path, kind: str, key: str) -> StoredContent:
+    def _read(self, path: Path, kind: str, key: str) -> StoredContent | None:
         raw = path.read_text(encoding="utf-8", errors="replace")
-        front, body = split_frontmatter(raw)
+        try:
+            front, body = split_frontmatter(raw, strict=True)
+        except _BadFrontmatter:
+            return None
         stat = path.stat()
         slug = path.stem
         mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat().replace("+00:00", "Z")
@@ -172,12 +254,12 @@ class FileStore:
         title = _text(front.get("title"))
         if not title:
             heading = HEADING.search(body)
-            title = heading.group(1).strip() if heading else slug
+            title = heading.group(1).strip() if heading else slug.replace("-", " ")
 
-        stored_kind = _text(front.get("kind")) or kind
-        status = _text(front.get("status"))
-        if status not in ("draft", "published"):
-            status = "published"
+        # Hugo, Astro and Jekyll mark drafts with `draft: true` or `published: false`.
+        status = "draft" if (
+            front.get("status") == "draft" or front.get("draft") is True or front.get("published") is False
+        ) else "published"
 
         seo: dict | None = None
         if isinstance(front.get("seo"), dict):
@@ -195,22 +277,22 @@ class FileStore:
             "id": content_id,
             "key": key,
             "external_id": _text(front.get("external_id")),
-            "kind": stored_kind,
+            "kind": kind,  # the path decides, whatever the frontmatter says
             "title": title,
-            "slug": _text(front.get("slug")) or slug,
+            "slug": slug,
             "markdown": body,
             "html": render_markdown(body),
-            "excerpt": _text(front.get("excerpt")),
+            "excerpt": _text(front.get("excerpt")) or _text(front.get("description")),
             "tags": _tags(front.get("tags")),
-            "categories": _tags(front.get("categories")),
+            "categories": _tags(front.get("categories") or front.get("category")),
             "cover_image_url": _text(front.get("cover_image_url")),
             "cover_image_alt": _text(front.get("cover_image_alt")),
             "canonical_url": _text(front.get("canonical_url")),
             "seo": seo,
             "author": author,
             "status": status,
-            "published_at": _iso(front.get("published_at")) or mtime,
-            "updated_at": _iso(front.get("updated_at")) or mtime,
+            "published_at": _iso(front.get("published_at")) or _iso(front.get("date")) or _iso(front.get("pubDate")) or mtime,
+            "updated_at": _iso(front.get("updated_at")) or _iso(front.get("lastmod")) or mtime,
             "version": _int(front.get("version")),
             # mtime + size: touching the file on disk is a new ETag, whatever wrote it
             "etag": f'"{content_id}-{stat.st_mtime_ns // 1_000_000}-{stat.st_size}"',
@@ -221,7 +303,7 @@ class FileStore:
         if split is None:
             return None
         path = self._path(*split)
-        return self._read(path, split[0], key) if path.is_file() else None
+        return self._read(path, split[0], key) if path.is_file() else None  # None also for hidden files
 
     def _list_sync(self, key: str, filter: ListFilter) -> tuple[list[StoredContent], str | None]:
         kinds = [filter.kind] if filter.kind else self._kinds()
@@ -234,7 +316,7 @@ class FileStore:
                 if not SLUG_RE.match(path.stem):
                     continue
                 entry = self._read(path, kind, key)
-                if matches(entry, filter):
+                if entry is not None and matches(entry, filter):
                     entries.append(entry)
         return paginate(entries, filter)
 
@@ -266,11 +348,21 @@ class FileStore:
         target = self._path(entry["kind"], entry["slug"])
         previous = self.split_id(entry.get("id") or "")
         previous_path = self._path(*previous) if previous else None
+        # Never overwrite a file that is not this entry (including one whose frontmatter is unreadable).
+        if previous_path != target and target.exists():
+            raise InkwireError("conflict", f"{entry['kind']}/{entry['slug']}.md already exists")
+
+        # An edit of an existing file changes only what changed in it (its own frontmatter keys survive).
+        text = None
+        if previous and previous_path is not None and previous_path.is_file():
+            before = self._read(previous_path, previous[0], key)
+            if before is not None:
+                text = _edit_text(previous_path.read_text(encoding="utf-8", errors="replace"), before, entry)
 
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_name(f".{target.name}.tmp-{secrets.token_hex(4)}")
         try:
-            tmp.write_text(self._serialize(entry), encoding="utf-8")
+            tmp.write_text(text or self._serialize(entry), encoding="utf-8")
             os.replace(tmp, target)
         finally:
             if tmp.exists():
@@ -278,7 +370,10 @@ class FileStore:
 
         if previous_path is not None and previous_path != target and previous_path.is_file():
             previous_path.unlink()
-        return self._read(target, entry["kind"], key)
+        saved = self._read(target, entry["kind"], key)
+        if saved is None:
+            raise InkwireError("internal", "the entry was written but could not be read back")
+        return saved
 
     def _remove_sync(self, key: str, content_id: str) -> bool:
         split = self.split_id(content_id)

@@ -236,3 +236,37 @@ describe("GitHubStore failures", () => {
     assert.ok(s);
   });
 });
+
+describe("GitHubStore edits keep a hand-written file's own frontmatter", () => {
+  test("a PATCH changes only what it names; the repo file keeps layout, comments and its draft key", async () => {
+    gh = fakeGitHub({
+      "content/post/existing-post.md": `---
+# Astro content collection
+layout: ../../layouts/Post.astro
+title: Existing Post
+description: The site's own description
+pubDate: 2025-03-04
+heroImage: /images/hero.png
+weight: 7
+draft: true
+---
+
+# Existing Post
+
+Old text.
+`,
+    });
+    const e = env(store(gh));
+    const r = await e.patch("post.existing-post", { status: "published", markdown: "# Existing Post\n\nNew text." });
+    assert.equal(r.status, 200);
+    const text = gh.files.get("content/post/existing-post.md")!;
+    assert.match(text, /# Astro content collection/);
+    assert.match(text, /layout: \.\.\/\.\.\/layouts\/Post\.astro/);
+    assert.match(text, /weight: 7/);
+    assert.match(text, /draft: false/);
+    assert.match(text, /pubDate: 2025-03-04/);
+    assert.doesNotMatch(text, /^status:/m);
+    assert.match(text, /New text\./);
+  });
+});
+

@@ -228,3 +228,86 @@ describe("FileStore media", () => {
     assert.equal(readdirSync(path.join(root, "media")).length, 2);
   });
 });
+
+describe("FileStore edits keep a hand-written file's own frontmatter", () => {
+  const ASTRO = `---
+# Astro content collection
+layout: ../../layouts/Post.astro
+title: Existing Post
+description: The site's own description
+pubDate: 2025-03-04
+heroImage: /images/hero.png
+weight: 7
+draft: true
+---
+
+# Existing Post
+
+Old text.
+`;
+
+  test("draft: true, pubDate and description are read as draft, published_at and excerpt", async () => {
+    write("post/existing-post.md", ASTRO);
+    const e = (await store.get("default", "post.existing-post"))!;
+    assert.equal(e.status, "draft");
+    assert.equal(e.published_at, "2025-03-04T00:00:00.000Z");
+    assert.equal(e.excerpt, "The site's own description");
+    write("post/hugo.md", "---\ntitle: H\npublished: false\nlastmod: 2025-05-06\n---\nx\n");
+    const h = (await store.get("default", "post.hugo"))!;
+    assert.equal(h.status, "draft");
+    assert.equal(h.updated_at, "2025-05-06T00:00:00.000Z");
+  });
+
+  test("a PATCH changes only what it names: layout, heroImage, weight, comments and aliases survive", async () => {
+    const f = write("post/existing-post.md", ASTRO);
+    const e = env(store);
+    const r = await e.patch("post.existing-post", { markdown: "# Existing Post\n\nNew text." });
+    assert.equal(r.status, 200);
+    const text = readFileSync(f, "utf8");
+    assert.match(text, /# Astro content collection/);
+    assert.match(text, /layout: \.\.\/\.\.\/layouts\/Post\.astro/);
+    assert.match(text, /heroImage: \/images\/hero\.png/);
+    assert.match(text, /weight: 7/);
+    assert.match(text, /description: The site's own description/);
+    assert.match(text, /pubDate: 2025-03-04/);
+    assert.match(text, /draft: true/);
+    assert.doesNotMatch(text, /^excerpt:/m); // no second spelling of description
+    assert.match(text, /New text\./);
+  });
+
+  test("publishing flips the file's own draft key, not a new status key", async () => {
+    const f = write("post/existing-post.md", ASTRO);
+    await env(store).patch("post.existing-post", { status: "published" });
+    const text = readFileSync(f, "utf8");
+    assert.match(text, /draft: false/);
+    assert.doesNotMatch(text, /^status:/m);
+    assert.equal((await store.get("default", "post.existing-post"))!.status, "published");
+  });
+
+  test("editing the excerpt writes description when that is the file's spelling", async () => {
+    const f = write("post/existing-post.md", ASTRO);
+    await env(store).patch("post.existing-post", { excerpt: "Short" });
+    const text = readFileSync(f, "utf8");
+    assert.match(text, /description: Short/);
+    assert.doesNotMatch(text, /^excerpt:/m);
+  });
+
+  test("seo and tags are added to a file that had none, without touching its other keys", async () => {
+    const f = write("post/existing-post.md", ASTRO);
+    await env(store).patch("post.existing-post", { seo: { title: "T", noindex: true }, tags: ["a", "b"] });
+    const text = readFileSync(f, "utf8");
+    assert.match(text, /weight: 7/);
+    const back = (await store.get("default", "post.existing-post"))!;
+    assert.deepEqual(back.tags, ["a", "b"]);
+    assert.equal(back.seo?.title, "T");
+  });
+
+  test("a file with broken YAML stays hidden and is never overwritten by a new entry with its slug", async () => {
+    write("post/broken.md", "---\ntitle: [unclosed\n---\nbody\n");
+    assert.equal(await store.get("default", "post.broken"), null);
+    const r = await env(store).upsert(post(1, { slug: "broken" }));
+    assert.equal(r.status, 409);
+    assert.match(readFileSync(path.join(root, "post/broken.md"), "utf8"), /unclosed/);
+  });
+});
+

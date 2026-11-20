@@ -101,7 +101,7 @@ def test_a_title_falls_back_to_the_slug(tmp_path):
     directory = tmp_path / "post"
     directory.mkdir()
     (directory / "no-heading.md").write_text("Just body text, no heading.\n")
-    assert run(FileStore(tmp_path).get(KEY, "post:no-heading"))["title"] == "no-heading"
+    assert run(FileStore(tmp_path).get(KEY, "post:no-heading"))["title"] == "no heading"
 
 
 def test_refuses_traversal_names(tmp_path):
@@ -273,3 +273,96 @@ def test_a_hand_written_file_may_carry_categories(tmp_path):
     (tmp_path / "post" / "by-hand.md").write_text("---\ntitle: By hand\ncategories: [A, B]\ncover_image_alt: Hand alt\n---\n\nbody")
     got = run(FileStore(tmp_path).get(KEY, "post:by-hand"))
     assert got["categories"] == ["A", "B"] and got["cover_image_alt"] == "Hand alt"
+
+
+ASTRO = """---
+layout: ../../layouts/Post.astro
+title: Existing Post
+description: The site's own description
+pubDate: 2025-03-04
+heroImage: /images/hero.png
+weight: 7
+draft: true
+---
+
+# Existing Post
+
+Old text.
+"""
+
+
+def edit(store, content_id, **changes):
+    """What the PATCH handler does: read the entry, change fields, save it under its id."""
+    current = run(store.get(KEY, content_id))
+    return run(store.save(KEY, {**current, **changes, "updated_at": "2026-11-20T10:00:00Z"}))
+
+
+def test_draft_and_date_aliases_of_hugo_and_astro_files_are_read(tmp_path):
+    (tmp_path / "post").mkdir()
+    (tmp_path / "post" / "existing-post.md").write_text(ASTRO)
+    (tmp_path / "post" / "hugo.md").write_text("---\ntitle: H\npublished: false\nlastmod: 2025-05-06\n---\nx\n")
+    store = FileStore(tmp_path)
+    e = run(store.get(KEY, "post:existing-post"))
+    assert e["status"] == "draft"
+    assert e["published_at"] == "2025-03-04T00:00:00.000Z"
+    assert e["excerpt"] == "The site's own description"
+    h = run(store.get(KEY, "post:hugo"))
+    assert h["status"] == "draft"
+    assert h["updated_at"] == "2025-05-06T00:00:00.000Z"
+
+
+def test_an_edit_keeps_the_files_own_frontmatter_keys(tmp_path):
+    (tmp_path / "post").mkdir()
+    file = tmp_path / "post" / "existing-post.md"
+    file.write_text(ASTRO)
+    store = FileStore(tmp_path)
+    edit(store, "post:existing-post", markdown="# Existing Post\n\nNew text.")
+    front, body = split_frontmatter(file.read_text())
+    assert front["layout"] == "../../layouts/Post.astro"
+    assert front["heroImage"] == "/images/hero.png"
+    assert front["weight"] == 7
+    assert front["description"] == "The site's own description"
+    assert front["draft"] is True
+    assert "excerpt" not in front and "status" not in front
+    assert "New text." in body
+
+
+def test_publishing_flips_the_files_own_draft_key(tmp_path):
+    (tmp_path / "post").mkdir()
+    file = tmp_path / "post" / "existing-post.md"
+    file.write_text(ASTRO)
+    store = FileStore(tmp_path)
+    edit(store, "post:existing-post", status="published")
+    front, _ = split_frontmatter(file.read_text())
+    assert front["draft"] is False and "status" not in front
+    assert run(store.get(KEY, "post:existing-post"))["status"] == "published"
+
+
+def test_editing_the_excerpt_writes_description_when_that_is_the_spelling(tmp_path):
+    (tmp_path / "post").mkdir()
+    file = tmp_path / "post" / "existing-post.md"
+    file.write_text(ASTRO)
+    edit(FileStore(tmp_path), "post:existing-post", excerpt="Short")
+    front, _ = split_frontmatter(file.read_text())
+    assert front["description"] == "Short" and "excerpt" not in front
+
+
+def test_a_file_with_broken_yaml_is_hidden_and_never_overwritten(tmp_path):
+    (tmp_path / "post").mkdir()
+    broken = tmp_path / "post" / "broken.md"
+    broken.write_text("---\ntitle: [unclosed\n---\nbody\n")
+    store = FileStore(tmp_path)
+    assert run(store.get(KEY, "post:broken")) is None
+    assert run(store.list(KEY, ListFilter()))[0] == []
+    with pytest.raises(InkwireError) as err:
+        run(store.save(KEY, entry(slug="broken", id="")))
+    assert err.value.code == "conflict"
+    assert "unclosed" in broken.read_text()
+
+
+def test_kind_and_slug_come_from_the_path_not_the_frontmatter(tmp_path):
+    (tmp_path / "post").mkdir()
+    (tmp_path / "post" / "real.md").write_text("---\ntitle: T\nkind: page\nslug: elsewhere\n---\nx\n")
+    e = run(FileStore(tmp_path).get(KEY, "post:real"))
+    assert e["kind"] == "post" and e["slug"] == "real" and e["id"] == "post:real"
+
