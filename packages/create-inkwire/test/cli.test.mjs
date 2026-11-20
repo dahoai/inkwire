@@ -50,7 +50,7 @@ describe("next", () => {
     const dir = next();
     const r = go(dir);
     assert.equal(r.code, 0, r.err);
-    for (const f of ["app/api/_inkwire/config.ts", "app/api/content/route.ts", "app/api/content/[id]/route.ts", "app/api/media/route.ts", "app/api/inkwire/route.ts", "app/inkwire-media/[...path]/route.ts"]) {
+    for (const f of ["app/api/_inkwire/config.ts", "app/api/content/route.ts", "app/api/content/[id]/route.ts", "app/api/media/route.ts", "app/api/media/[id]/route.ts", "app/api/terms/route.ts", "app/api/inkwire/route.ts", "app/inkwire-media/[...path]/route.ts"]) {
       assert.ok(existsSync(path.join(dir, f)), f);
     }
     assert.ok(existsSync(path.join(dir, "content/.gitkeep")));
