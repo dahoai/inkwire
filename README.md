@@ -133,7 +133,7 @@ publish("http://localhost:3000", "dev-key", {
 
 ## Status
 
-v1 (revised in place in November 2026 before adoption: the resource is `/api/content` with a `kind` field, and read/edit/delete/media/discovery were added): frozen schema, feature-gated conformance suite, reference receivers (Express, Next.js, FastAPI) sharing one contract, a one-command installer (`create-inkwire`, unpublished), two client SDKs. Published: `inkwire-client` on [npm](https://www.npmjs.com/package/inkwire-client) and [PyPI](https://pypi.org/project/inkwire-client/), and `inkwire-receiver-core` on [npm](https://www.npmjs.com/package/inkwire-receiver-core) and [PyPI](https://pypi.org/project/inkwire-receiver-core/). The SDKs and reference receivers are being updated to the revised contract now.
+v1 (revised in place in November 2026 before adoption: the resource is `/api/content` with a `kind` field, and read/edit/delete/media/discovery were added): frozen schema, feature-gated conformance suite, reference receivers (Express, Next.js, FastAPI) sharing one contract, a one-command installer (`create-inkwire`, unpublished), two client SDKs. Published: `inkwire-client` on [npm](https://www.npmjs.com/package/inkwire-client) and [PyPI](https://pypi.org/project/inkwire-client/), and `inkwire-receiver-core` on [npm](https://www.npmjs.com/package/inkwire-receiver-core) and [PyPI](https://pypi.org/project/inkwire-receiver-core/). The published versions predate the revised contract: the receivers (`inkwire-receiver-core` 0.3.0 on npm, 0.2.0 on PyPI) and the clients (Node 0.4.0, Python 0.2.0) in this repo implement it, pass the conformance suite, and are not released yet. `create-inkwire` needs `inkwire-receiver-core` 0.3.0 on npm first.
 
 ## License
 
