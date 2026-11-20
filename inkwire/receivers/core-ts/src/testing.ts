@@ -33,6 +33,11 @@ export interface StoreContractOptions {
    * survives the change.
    */
   opaqueIds?: boolean;
+  /**
+   * True for a store that holds only `post` (a blog's table): the checks that move an entry to
+   * another kind, or list a second kind, are skipped; asking for any other kind must list nothing.
+   */
+  singleKind?: boolean;
   /** Public address the store is expected to give an entry. Default: any non-empty string. */
   expectUrl?: (e: { kind: string; slug: string }) => string;
 }
@@ -131,6 +136,7 @@ export function runStoreContract(o: StoreContractOptions): void {
         assert.equal((await store.list(A, { slug: "old-slug", limit: 5 })).items.length, 0, "the old slug is free");
         assert.equal((await store.list(A, { slug: "new-slug", limit: 5 })).items.length, 1);
         assert.equal((await store.list(A, { limit: 10 })).items.length, 1, "no duplicate left behind");
+        if (o.singleKind) return;
         const third = await store.save(A, entry({ id: second.id, slug: "new-slug", kind: "page", version: 3, updated_at: iso(6) }));
         if (opaque) assert.equal(third.id, first.id);
         assert.equal((await store.list(A, { kind: "post", limit: 5 })).items.length, 0);
@@ -148,12 +154,12 @@ export function runStoreContract(o: StoreContractOptions): void {
     test("list filters: status, kind, tag, search, external_id, slug", () =>
       withStore(async (store) => {
         await store.save(A, entry({ slug: "one", external_id: "e1", title: "The Needle", tags: ["a", "b"] }));
-        await store.save(A, entry({ slug: "two", external_id: "e2", status: "draft", kind: "page", markdown: "haystack with a NEEDLE inside", updated_at: iso(1) }));
+        await store.save(A, entry({ slug: "two", external_id: "e2", status: "draft", kind: o.singleKind ? "post" : "page", markdown: "haystack with a NEEDLE inside", updated_at: iso(1) }));
         await store.save(A, entry({ slug: "three", external_id: "e3", excerpt: "needle in the excerpt", tags: ["b"], updated_at: iso(2) }));
         const slugs = async (f: Parameters<ContentStore["list"]>[1]) => (await store.list(A, f)).items.map((e) => e.slug).sort();
         assert.deepEqual(await slugs({ limit: 10 }), ["one", "three", "two"]);
         assert.deepEqual(await slugs({ status: "draft", limit: 10 }), ["two"]);
-        assert.deepEqual(await slugs({ kind: "page", limit: 10 }), ["two"]);
+        assert.deepEqual(await slugs({ kind: "page", limit: 10 }), o.singleKind ? [] : ["two"]);
         assert.deepEqual(await slugs({ tag: "b", limit: 10 }), ["one", "three"]);
         assert.deepEqual(await slugs({ tag: "nope", limit: 10 }), []);
         assert.deepEqual(await slugs({ search: "needle", limit: 10 }), ["one", "three", "two"], "case-insensitive over title, excerpt and markdown");
