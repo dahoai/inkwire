@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://inkwire.dev/schema/inkwire-media.schema.json",
+  "title": "Inkwire Media v1 (fetch-by-url variant)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["url"],
+  "properties": {
+    "url": { "type": "string", "format": "uri", "pattern": "^https?://" },
+    "alt": { "type": "string", "maxLength": 1024 }
+  }
+}

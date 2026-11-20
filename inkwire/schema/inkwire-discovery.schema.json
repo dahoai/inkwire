@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://inkwire.dev/schema/inkwire-discovery.schema.json",
+  "title": "Inkwire Discovery v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["inkwire", "features", "kinds"],
+  "properties": {
+    "inkwire": { "const": 1 },
+    "site": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "name": { "type": "string" }, "url": { "type": "string", "format": "uri", "pattern": "^https?://" } }
+    },
+    "features": {
+      "type": "array", "minItems": 1,
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+      "description": "upsert is always present. Known: upsert, list, get, update, delete, media. Open set for the future."
+    },
+    "kinds": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" } },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "markdown_bytes": { "type": "integer", "minimum": 1 }, "media_bytes": { "type": "integer", "minimum": 1 } }
+    }
+  }
+}

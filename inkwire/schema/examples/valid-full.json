@@ -1,6 +1,26 @@
-{ "external_id": "gen-2", "title": "Full", "markdown": "Body",
-  "slug": "full-post", "excerpt": "e", "tags": ["seo","ai"],
-  "cover_image_url": "https://x.test/c.jpg", "canonical_url": "https://x.test/p",
-  "seo": { "title": "Full search title", "description": "Full search description", "image_url": "https://x.test/og.jpg", "noindex": false },
-  "author": { "name": "Isaac", "email": "i@x.test" },
-  "status": "published", "published_at": "2026-07-22T04:00:00Z" }
+{
+  "external_id": "gen-2026-07-22-abc",
+  "title": "How we cut audit time 40%",
+  "markdown": "# Body\n\nText.",
+  "kind": "page",
+  "slug": "cut-audit-time",
+  "excerpt": "Short summary",
+  "tags": [
+    "seo",
+    "ai"
+  ],
+  "cover_image_url": "https://example.com/c.jpg",
+  "canonical_url": "https://origin/post",
+  "seo": {
+    "title": "Search result title",
+    "description": "Search result description",
+    "image_url": "https://example.com/og.jpg",
+    "noindex": false
+  },
+  "author": {
+    "name": "Isaac",
+    "email": "i@x.com"
+  },
+  "status": "published",
+  "published_at": "2026-07-22T04:00:00Z"
+}

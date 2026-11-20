@@ -1,17 +1,26 @@
 # Inkwire v1 — Specification
 
-The machine-readable request schema is `schema/inkwire-post.schema.json`; it is authoritative where prose and schema disagree.
+The machine-readable request schemas are `schema/inkwire-content.schema.json` (create),
+`schema/inkwire-patch.schema.json` (edit) and `schema/inkwire-discovery.schema.json`
+(discovery); they are authoritative where prose and schema disagree.
+
+> v1 was revised in place in November 2026, before public adoption: the resource moved from
+> `/api/posts` to `/api/content` with a `kind` field, and reading, editing, media and discovery
+> were added. Nothing conforms to the earlier shape.
 
 ## The wire contract
 
 ### Endpoint
 
-`POST /api/posts`
+`POST /api/content` — create or update one **content entry**: a markdown document with
+metadata (a blog post, a page, a changelog entry…). Every endpoint below shares the `/api`
+prefix and the bearer auth. A receiver that only wants the publish flow implements the one
+endpoint; everything else is an optional feature (see Discovery).
 
 ### Request
 
 ```http
-POST /api/posts
+POST /api/content
 Authorization: Bearer <site_api_key>
 Content-Type: application/json
 Idempotency-Key: gen-2026-07-22-abc        # optional; defaults to external_id
@@ -20,9 +29,9 @@ Idempotency-Key: gen-2026-07-22-abc        # optional; defaults to external_id
 ```jsonc
 {
   "external_id": "gen-2026-07-22-abc",   // REQUIRED. Stable caller id. Upsert key.
-  "kind": "post",                         // optional. "post" (default) or "page", if the receiver holds pages.
   "title": "How we cut audit time 40%",  // REQUIRED.
   "markdown": "# Body...\n\nText.",       // REQUIRED. Canonical content.
+  "kind": "post",                         // optional. "post" (default), "page", ... — what the receiver holds.
   "slug": "cut-audit-time",               // optional. Receiver finalizes/dedupes.
   "excerpt": "Short summary",             // optional.
   "tags": ["seo", "ai"],                  // optional. string[].
@@ -48,40 +57,43 @@ Idempotency-Key: gen-2026-07-22-abc        # optional; defaults to external_id
   "external_id": "gen-2026-07-22-abc",
   "url": "https://site/blog/cut-audit-time",
   "slug": "cut-audit-time",
+  "kind": "post",
   "status": "published",
   "created": true
 }
 ```
 
-`created: false` means an existing post (same `external_id`) was updated.
+`created: false` means an existing entry (same `external_id`, same `kind`) was updated.
 
 Response header: `Inkwire-Version: 1`.
 
 ### Semantics
 
-- **Upsert on `external_id`, scoped to the site/key.** Re-POST the same
-  `external_id` → update in place (never duplicate). This is both idempotency and
-  the "update" operation for callers that hold the whole post. To change part of an
-  existing post, or a post the receiver already had, use `PATCH` (see Reading and editing).
+- **Upsert on `external_id`, scoped to the site/key and kind.** Re-POST the same
+  `external_id` (and `kind`) → update in place (never duplicate). This is both idempotency and
+  the "update" operation for callers that hold the whole entry. To change part of an existing
+  entry, or one the receiver already had, use `PATCH` (see Reading and editing).
 - **Slug:** if `slug` is **omitted**, the receiver generates one (slugify title)
   and silently de-duplicates collisions (e.g. `-2` suffix) — never a 409. If the
-  caller **explicitly provides** a `slug` that a *different* `external_id` already
-  owns, the receiver returns `409 conflict` rather than silently changing it.
-  Final slug is always returned in the response.
-- **Status:** `draft` posts are stored but not publicly listed/rendered.
+  caller **explicitly provides** a `slug` that a *different* entry (same kind)
+  already owns, the receiver returns `409 conflict` rather than silently changing
+  it. Final slug is always returned in the response.
+- **Status:** `draft` entries are stored but not publicly listed/rendered.
+- **Kind:** entries of different kinds never collide on `external_id` or `slug`. A `kind` the
+  receiver does not hold is a `400 invalid_payload`.
 
 ### SEO Profile 1
 
-SEO Profile 1 is part of the post contract, not a separate endpoint. The
+SEO Profile 1 is part of the content contract, not a separate endpoint. The
 optional `seo` object contains overrides only; receivers derive effective SEO
-metadata for every post and pass it to their storage/rendering integration:
+metadata for every entry and pass it to their storage/rendering integration:
 
 ```text
 title       = seo.title       ?? title
 description = seo.description ?? first non-empty value of (excerpt, title)
 image_url   = seo.image_url   ?? cover_image_url (may be absent)
 noindex     = seo.noindex     ?? false
-canonical   = canonical_url   ?? the post's absolute public URL
+canonical   = canonical_url   ?? the entry's absolute public URL
 ```
 
 `seo.title` and `seo.description` must be non-empty when provided. SEO URLs
@@ -92,11 +104,11 @@ date, and tags; the profile does not duplicate them inside `seo`.
 A receiver core conforms to the **SEO input profile** when it validates these
 overrides and supplies the effective `title`, `description`, `image_url`, and
 `noindex` values to the application-owned store. The public URL is only known
-after the store finalizes the post, so the page renderer applies the canonical
+after the store finalizes the entry, so the page renderer applies the canonical
 fallback.
 
 A site may additionally claim **SEO rendering conformance** for publicly
-accessible `published` posts. Its returned HTML page must safely render:
+accessible `published` entries. Its returned HTML page must safely render:
 
 - one document `<title>` using the effective title;
 - `description`, canonical, `og:type=article`, `og:title`, `og:description`, and
@@ -109,95 +121,97 @@ accessible `published` posts. Its returned HTML page must safely render:
   `author`, and `keywords` when their source fields exist.
 
 When present, JSON-LD `author` is a `Person` object with `name`, and `keywords`
-is an array containing the post tags. `mainEntityOfPage` may be the canonical URL
+is an array containing the entry tags. `mainEntityOfPage` may be the canonical URL
 string or a `WebPage` object whose `@id` is that URL.
 
 Metadata values must be HTML-escaped. JSON-LD must be serialized so
 caller-controlled text cannot terminate its `<script>` element. Additional
-site-wide metadata is allowed. Draft posts remain non-public under the base
+site-wide metadata is allowed. Draft entries remain non-public under the base
 protocol and cannot claim rendering conformance.
 
-### Reading and editing
+### Discovery: `GET /api/inkwire`
 
-`POST /api/posts` is the only endpoint a receiver must implement. A receiver may also
-implement the endpoints below; each one is a **feature** it advertises in discovery, so a
-publisher never guesses. Everything here is optional for the receiver and additive to the
-publish contract above.
-
-Posts are addressed by the receiver's own `id` (the `id` in the publish response). A post the
-site already had, or wrote by hand, has an `id` too and a `null` `external_id`: it can be read
-and edited like any other. That is what makes an existing site auditable.
-
-#### Discovery: `GET /api/inkwire`
+One unauthenticated-light request that tells a publisher what this receiver can do. Same bearer
+auth as everything else.
 
 ```json
 {
   "inkwire": 1,
   "site": { "name": "Acme", "url": "https://acme.com" },
   "features": ["upsert", "list", "get", "update", "delete", "media"],
-  "kinds": ["post"],
+  "kinds": ["post", "page"],
   "limits": { "markdown_bytes": 1000000, "media_bytes": 10000000 }
 }
 ```
 
-Same bearer auth. `upsert` is always present. A receiver without this endpoint answers 404 and
-clients treat it as `["upsert"]`, so every receiver written before this section still conforms.
-`kinds` lists the content kinds it holds (`"post"`, and optionally `"page"`).
+`upsert` is always present. `kinds` lists what the receiver holds (publishers must not send
+other kinds). `limits` are ceilings in bytes; a request over one answers `413 too_large`. A receiver without this endpoint answers
+404 and clients treat it as `features: ["upsert"]`, `kinds: ["post"]`, no limits — so every
+receiver written before this section still conforms.
 
-#### Reading: `GET /api/posts`, `GET /api/posts/{id}`  (features `list`, `get`)
+### Reading: `GET /api/content`, `GET /api/content/{id}`  (features `list`, `get`)
 
-`GET /api/posts?status=&kind=&tag=&search=&external_id=&slug=&limit=&cursor=` returns
+`GET /api/content?status=&kind=&tag=&search=&external_id=&slug=&limit=&cursor=` returns
 
 ```json
-{ "items": [ PostSummary ], "next_cursor": "opaque-or-null" }
+{ "items": [ ContentSummary ], "next_cursor": "opaque-or-null" }
 ```
 
-`limit` defaults to 20, at most 100. `cursor` is opaque. `search` matches title, excerpt and
-markdown, case-insensitively. Drafts are listed to a caller who holds a key. `GET /api/posts/{id}`
-returns the full post.
+`limit` defaults to 20, at most 100. `cursor` is opaque: pass back `next_cursor` to get the next
+page. `search` matches title, excerpt and markdown, case-insensitively. `tag` matches one tag.
+Drafts are listed to a caller who holds a key. `GET /api/content/{id}` returns the full entry.
 
-`PostSummary`: `id`, `external_id` (or `null`), `kind`, `title`, `slug`, `url`, `status`,
-`excerpt`, `tags`, `published_at`, `updated_at`. The full post adds `markdown`, `cover_image_url`,
-`canonical_url`, `author`, and `seo`, which holds the **effective** values (the overrides applied
-over the derived defaults from SEO Profile 1: `title`, `description`, `image_url`, `noindex`).
-Every single-post response carries an `ETag`.
+`ContentSummary`: `id`, `external_id` (or `null`), `kind`, `title`, `slug`, `url`, `status`,
+`excerpt`, `tags`, `published_at`, `updated_at`. The full entry adds `markdown`,
+`cover_image_url`, `canonical_url`, `author`, and `seo`, which holds the **effective** values
+(the overrides applied over the derived defaults from SEO Profile 1: `title`, `description`,
+`image_url`, `noindex`). Every single-entry response carries an `ETag` header — opaque, changes
+on every accepted write.
 
-#### Editing: `PATCH /api/posts/{id}`  (feature `update`)
+Entries the site already had, or wrote by hand, are first-class: they appear in listings with
+`external_id: null` and can be read and edited like any other. That is what makes an existing
+site auditable on day one.
 
-Body: any subset of the publish fields (`title`, `markdown`, `slug`, `excerpt`, `tags`,
+### Editing: `PATCH /api/content/{id}`  (feature `update`)
+
+Body: any subset of the publish fields (`title`, `kind`, `markdown`, `slug`, `excerpt`, `tags`,
 `cover_image_url`, `canonical_url`, `seo`, `author`, `status`, `published_at`). Given fields
-replace the stored value; omitted fields keep theirs; `null` clears an optional field. `seo` is
-merged per key. `external_id` cannot be changed. A new `slug` follows the publish rules (409 if a
-different post owns it) and changes the post's URL.
+replace the stored value; omitted fields keep theirs; `null` clears an optional field
+(`excerpt`, `tags`, `cover_image_url`, `canonical_url`, `seo`, `author`, `published_at`).
+`seo` present as an object is merged per key. `external_id` cannot be changed (a body that
+carries it is `400 invalid_payload`). A `kind` change is allowed when the receiver holds the
+target kind; slug rules then apply in the target kind. A new `slug` follows the publish rules
+(409 if a different entry of that kind owns it) and changes the entry's URL.
 
-Send `If-Match: <etag>` from the read the edit is based on. If the post changed since, the answer
-is `412 stale` and nothing is written, so two editors never overwrite each other. Receivers that
-advertise `update` MUST honour `If-Match`.
+Send `If-Match: <etag>` from the read the edit is based on. If the entry changed since, the
+answer is `412 stale` and nothing is written, so two editors never overwrite each other.
+Receivers that advertise `update` MUST honour `If-Match` when it is sent.
 
-Text edits are computed by the client: fetch the post, replace the exact passage in `markdown`
+Text edits are computed by the client: fetch the entry, replace the exact passage in `markdown`
 (the SDKs have an `edits` helper that requires each `find` to match exactly once), `PATCH` the
 whole `markdown` with `If-Match`. The receiver never has to merge text.
 
-The response is the full updated post with its new `ETag`.
+The response is the full updated entry with its new `ETag`.
 
-#### Deleting: `DELETE /api/posts/{id}`  (feature `delete`)
+### Deleting: `DELETE /api/content/{id}`  (feature `delete`)
 
-Removes the post from the public site. A receiver may keep it internally (trash, or `draft`), but
-it must stop being public. Honours `If-Match`. Response: `{ "id": "...", "deleted": true }`.
+Removes the entry from the public site. A receiver may keep it internally (trash, or a `draft`
+flip) but it must stop being public. Honours `If-Match`. Response:
+`{ "id": "...", "deleted": true }`.
 
-#### Media: `POST /api/media`  (feature `media`)
+### Media: `POST /api/media`  (feature `media`)
 
-Either `multipart/form-data` with a `file` part, or JSON `{ "url": "https://...", "alt": "..." }`
-for the receiver to fetch (SSRF-guarded: public `http(s)` hosts only). Optional `alt`. Response:
-`{ "id": "...", "url": "https://site/uploads/x.jpg", "alt": "..." }`. Use `url` in markdown or as
-`cover_image_url`. Only images (`jpeg`, `png`, `gif`, `webp`, `avif`; never SVG) up to
-`limits.media_bytes`. A site with nowhere to store files omits the feature: `cover_image_url` and
-markdown images keep working with any public URL.
+Either `multipart/form-data` with a `file` part and an optional `alt` field, or JSON
+`{ "url": "https://...", "alt": "..." }` for the receiver to fetch (SSRF-guarded: public
+`http(s)` hosts only). Response:
 
-#### Read-only keys
+```json
+{ "id": "...", "url": "https://site/uploads/x.jpg", "alt": "..." }
+```
 
-A receiver may mark a key read-only. It can call every `GET`; any call that writes answers
-`403 forbidden`. Handy for letting an agent audit a site before it may change it.
+Use `url` in markdown or as `cover_image_url`. Only images (`jpeg`, `png`, `gif`, `webp`,
+`avif`; never SVG) up to `limits.media_bytes` (over it: `413 too_large`). A site with nowhere to store files omits the
+feature: `cover_image_url` and markdown images keep working with any public URL.
 
 ### Errors
 
@@ -207,30 +221,36 @@ A receiver may mark a key read-only. It can call every `GET`; any call that writ
 
 | HTTP | `code` | When |
 | --- | --- | --- |
-| 400 | `invalid_payload` | Missing/invalid required fields. |
+| 400 | `invalid_payload` | Missing/invalid required fields, or a `kind` the receiver does not hold. |
 | 401 | `unauthorized` | Missing/bad API key. |
 | 403 | `forbidden` | The key is read-only and the call writes. |
-| 404 | `not_found` | No post (or media) with that `id`. |
-| 409 | `conflict` | Requested `slug` already used by a *different* post. |
-| 412 | `stale` | `If-Match` no longer matches: the post changed since the caller read it. |
+| 404 | `not_found` | No entry (or media) with that `id`, or an unknown endpoint. |
+| 409 | `conflict` | Requested `slug` already used by a *different* entry of that kind. |
+| 412 | `stale` | `If-Match` no longer matches: the entry changed since the caller read it. |
 | 413 | `too_large` | Body or upload over the receiver's `limits`. |
 | 429 | `rate_limited` | Per-key rate limit exceeded. |
 | 500 | `internal` | Receiver/storage failure. |
 
 ### Versioning
 
-`Inkwire-Version: 1`. Only additive changes within v1 (new optional
-fields, new optional endpoints advertised by discovery). Breaking changes bump to `/api/posts` v2 (path or header negotiated).
+`Inkwire-Version: 1`. Only additive changes within v1 (new optional fields, new optional
+endpoints advertised by discovery). Breaking changes bump the version (path or header
+negotiated).
 
 ---
 
 ## Auth
 
-**Per-site bearer API key over HTTPS.** Each site holds one or more revocable
-keys. Callers send `Authorization: Bearer <key>`. Proportionate because callers
-are Isaac's own apps.
+**Per-site bearer API key over HTTPS.** Each site holds one or more revocable keys. Callers send
+`Authorization: Bearer <key>`.
 
-**Optional hardening (documented, not required in v1):** `X-Signature:
+**Key modes.** A key is full (default) or read-only. A read-only key may call every `GET`
+(discovery, list, single) and receives `403 forbidden` on any call that writes. Handy for
+letting an agent audit a site before it may change it. Reference receivers read keys from
+`INKWIRE_API_KEYS`, a comma-separated list where a `:ro` suffix marks a key read-only:
+`INKWIRE_API_KEYS=dev-key,audit-key:ro`.
+
+**Optional hardening (documented, not required):** `X-Signature:
 sha256=<hmac(raw_body, key)>` for body integrity + replay resistance. Receivers
 MAY verify it; the spec reserves the header.
 
@@ -271,5 +291,3 @@ Allowed URL schemes (for `href`/`src`, and enforced separately on
 `cover_image_url`, `canonical_url`, and `seo.image_url` are plain URL fields, not markdown —
 they bypass the HTML sanitizer entirely and go straight to storage, so they
 are independently restricted to `http://`/`https://` at the schema level.
-
----

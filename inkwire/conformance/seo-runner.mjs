@@ -14,7 +14,7 @@ const canonical = `https://canonical.example.test/${id}`;
 const publishedAt = "2026-08-01T12:00:00Z";
 
 async function publish(body) {
-  const response = await fetch(`${BASE.replace(/\/$/, "")}/api/posts`, {
+  const response = await fetch(`${BASE.replace(/\/$/, "")}/api/content`, {
     method: "POST",
     headers: {
       "content-type": "application/json",

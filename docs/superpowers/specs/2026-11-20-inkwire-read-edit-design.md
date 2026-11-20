@@ -1,6 +1,6 @@
 # Inkwire: read, edit and drop-in receivers (additive, still v1)
 
-**Status:** Draft for review. **Date:** 2026-11-20. **Normative text:** `inkwire/SPEC.md`,
+**Status:** Contract built and validated (2026-11-20): SPEC.md revised, 4 schemas (content/patch/discovery/media) with 18 schema tests, feature-gated conformance runner + 56 cases proven against a stub receiver. Lanes below are next. Generalization per Isaac: the resource is `/api/content` with a `kind` field (was `/api/posts`), read-only keys ship now, limits are enforced (413). **Normative text:** `inkwire/SPEC.md`,
 section "Reading and editing" (already drafted there).
 
 ## Why
