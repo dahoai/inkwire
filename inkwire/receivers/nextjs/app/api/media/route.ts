@@ -1,6 +1,6 @@
-// POST /api/media: upload an image (multipart: file + optional alt) or JSON {url, alt} to fetch.
+// GET /api/media: list the uploaded images. POST /api/media: upload an image (multipart: file + optional alt) or JSON {url, alt} to fetch.
 // The core parses the raw multipart body itself, so this route hands over the bytes as they came.
-import { handleMedia } from "inkwire-receiver-core";
+import { handleMedia, handleMediaList } from "inkwire-receiver-core";
 import { getInkwire, toResponse, tooLarge } from "../_inkwire/config";
 
 export const runtime = "nodejs";
@@ -20,4 +20,9 @@ export async function POST(req: Request) {
       config,
     }),
   );
+}
+
+export async function GET(req: Request) {
+  const { keys, store } = getInkwire();
+  return toResponse(await handleMediaList({ authHeader: req.headers.get("authorization"), query: new URL(req.url).searchParams, keys, store }));
 }

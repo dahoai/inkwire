@@ -3,8 +3,9 @@ import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:
 import path from "node:path";
 import { InkwireError } from "../errors.js";
 import { KIND_RE, RESERVED_KINDS, SLUG_FILE_RE, idFor, parseEntryFile, parseId, serializeEntry } from "../files.js";
-import { matches, pageOf, recencyKey } from "../list.js";
-import type { ContentStore, ListFilter, ListResult, MediaInput, SaveEntry, StoredContent, StoredMedia } from "../store.js";
+import { matches, pageMedia, pageOf, recencyKey } from "../list.js";
+import { MEDIA_FILE_RE, MEDIA_ID_RE, META_SUFFIX, type MediaMeta, parseMeta, patchMeta, serializeMeta, toMedia } from "../media-meta.js";
+import type { ContentStore, ListFilter, ListResult, MediaInput, MediaListFilter, MediaListResult, SaveEntry, StoredContent, StoredMedia } from "../store.js";
 
 export interface FileStoreOptions {
   /** The content directory: `<root>/<kind>/<slug>.md`. */
@@ -157,21 +158,62 @@ export class FileStore implements ContentStore {
     return true;
   }
 
+  private async writeAtomic(file: string, data: string | Buffer) {
+    const tmp = path.join(path.dirname(file), `.${randomBytes(6).toString("hex")}.tmp`);
+    try {
+      await writeFile(tmp, data);
+      await rename(tmp, file);
+    } catch (e) {
+      await unlink(tmp).catch(() => {});
+      throw e;
+    }
+  }
+
   async saveMedia(_key: string, m: MediaInput): Promise<StoredMedia> {
     const dir = path.join(this.root, "media");
     await mkdir(dir, { recursive: true });
     const hex = randomBytes(8).toString("hex");
     const name = `${hex}-${m.filename}`;
     const file = path.join(dir, name);
-    const tmp = path.join(dir, `.${hex}.tmp`);
-    try {
-      await writeFile(tmp, m.bytes);
-      await rename(tmp, file);
-    } catch (e) {
-      await unlink(tmp).catch(() => {});
-      throw e;
+    const meta: MediaMeta = { ...(m.alt !== undefined ? { alt: m.alt } : {}), content_type: m.contentType, created_at: new Date().toISOString() };
+    await this.writeAtomic(file, m.bytes);
+    await this.writeAtomic(`${file}${META_SUFFIX}`, serializeMeta(meta));
+    return toMedia(hex, `${this.mediaBase}/${name}`, meta);
+  }
+
+  private async readMedia(dir: string, name: string): Promise<StoredMedia | null> {
+    const m = MEDIA_FILE_RE.exec(name);
+    if (!m || name.endsWith(META_SUFFIX)) return null;
+    const file = path.join(dir, name);
+    const st = await stat(file).catch(() => null);
+    if (!st?.isFile()) return null;
+    const raw = await readFile(`${file}${META_SUFFIX}`, "utf8").catch(() => null);
+    return toMedia(m[1]!, `${this.mediaBase}/${name}`, parseMeta(raw, name, st.mtime.toISOString()));
+  }
+
+  async listMedia(_key: string, filter: MediaListFilter): Promise<MediaListResult> {
+    const dir = path.join(this.root, "media");
+    const names = await readdir(dir).catch(() => [] as string[]);
+    const all: StoredMedia[] = [];
+    for (const name of names) {
+      const item = await this.readMedia(dir, name);
+      if (item) all.push(item);
     }
-    await writeFile(`${file}.meta.json`, JSON.stringify({ alt: m.alt ?? null, content_type: m.contentType }), "utf8");
-    return { id: hex, url: `${this.mediaBase}/${name}`, ...(m.alt !== undefined ? { alt: m.alt } : {}) };
+    return pageMedia(all, filter);
+  }
+
+  async updateMedia(_key: string, id: string, patch: { alt?: string | null; title?: string | null }): Promise<StoredMedia | null> {
+    if (!MEDIA_ID_RE.test(id)) return null;
+    const dir = path.join(this.root, "media");
+    const name = (await readdir(dir).catch(() => [] as string[])).find((n) => n.startsWith(`${id}-`) && !n.endsWith(META_SUFFIX));
+    if (!name) return null;
+    const cur = await this.readMedia(dir, name);
+    if (!cur) return null;
+    const meta = patchMeta(
+      { ...(cur.alt !== undefined ? { alt: cur.alt } : {}), ...(cur.title !== undefined ? { title: cur.title } : {}), content_type: cur.mime_type, created_at: cur.created_at },
+      patch,
+    );
+    await this.writeAtomic(path.join(dir, `${name}${META_SUFFIX}`), serializeMeta(meta));
+    return toMedia(id, cur.url, meta);
   }
 }

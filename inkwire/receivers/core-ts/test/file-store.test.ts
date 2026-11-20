@@ -218,7 +218,8 @@ describe("FileStore media", () => {
     assert.equal(m.alt, "One pixel");
     const name = m.url.split("/").pop()!;
     assert.deepEqual(readFileSync(path.join(root, "media", name)), PNG);
-    assert.deepEqual(JSON.parse(readFileSync(path.join(root, "media", `${name}.meta.json`), "utf8")), { alt: "One pixel", content_type: "image/png" });
+    assert.deepEqual(JSON.parse(readFileSync(path.join(root, "media", `${name}.meta.json`), "utf8")), { alt: "One pixel", content_type: "image/png", created_at: m.created_at });
+    assert.equal(m.mime_type, "image/png");
   });
   test("through handleMedia", async () => {
     const mp = multipart([{ name: "file", file: { filename: "p.png", contentType: "image/png", data: PNG } }]);

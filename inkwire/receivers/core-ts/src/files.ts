@@ -51,7 +51,9 @@ export function serializeEntry(e: Draft): string {
     status: e.status,
     excerpt: e.excerpt,
     tags: e.tags,
+    categories: e.categories,
     cover_image_url: e.cover_image_url,
+    cover_image_alt: e.cover_image_alt,
     canonical_url: e.canonical_url,
     seo: e.seo && Object.keys(e.seo).length ? e.seo : undefined,
     author: e.author,
@@ -91,12 +93,14 @@ export function parseEntryFile(
 
   const heading = /^#[ \t]+(.+?)[ \t]*#*[ \t]*$/m.exec(body)?.[1];
   const title = str(fm.title) ?? (heading ? heading.trim() : where.slug.replace(/-/g, " "));
-  const tagsRaw = fm.tags;
-  const tags = Array.isArray(tagsRaw)
-    ? tagsRaw.filter((t): t is string => typeof t === "string").map((t) => t.slice(0, 64))
-    : typeof tagsRaw === "string"
-      ? tagsRaw.split(",").map((t) => t.trim()).filter(Boolean)
-      : undefined;
+  const terms = (raw: unknown): string[] | undefined =>
+    Array.isArray(raw)
+      ? raw.filter((t): t is string => typeof t === "string" && t.trim() !== "").map((t) => t.slice(0, 64))
+      : typeof raw === "string"
+        ? raw.split(",").map((t) => t.trim()).filter(Boolean).map((t) => t.slice(0, 64))
+        : undefined;
+  const tags = terms(fm.tags);
+  const categories = terms(fm.categories ?? fm.category);
   const seoRaw = fm.seo && typeof fm.seo === "object" && !Array.isArray(fm.seo) ? (fm.seo as Record<string, unknown>) : null;
   const seo: SeoOverrides = {};
   if (seoRaw) {
@@ -104,6 +108,9 @@ export function parseEntryFile(
     if (str(seoRaw.description)) seo.description = str(seoRaw.description);
     if (httpOnly(seoRaw.image_url)) seo.image_url = httpOnly(seoRaw.image_url);
     if (typeof seoRaw.noindex === "boolean") seo.noindex = seoRaw.noindex;
+    if (str(seoRaw.og_title)) seo.og_title = str(seoRaw.og_title);
+    if (str(seoRaw.og_description)) seo.og_description = str(seoRaw.og_description);
+    if (str(seoRaw.json_ld)) seo.json_ld = str(seoRaw.json_ld);
   }
   const authorRaw = fm.author;
   const author =
@@ -117,6 +124,7 @@ export function parseEntryFile(
         : undefined;
   const excerpt = str(fm.excerpt) ?? str(fm.description);
   const cover = httpOnly(fm.cover_image_url);
+  const coverAlt = str(fm.cover_image_alt);
   const canonical = httpOnly(fm.canonical_url);
 
   return {
@@ -128,7 +136,9 @@ export function parseEntryFile(
     html: renderMarkdown(body),
     ...(excerpt ? { excerpt: excerpt.slice(0, 1024) } : {}),
     ...(tags && tags.length ? { tags } : {}),
+    ...(categories && categories.length ? { categories } : {}),
     ...(cover ? { cover_image_url: cover } : {}),
+    ...(coverAlt ? { cover_image_alt: coverAlt.slice(0, 1024) } : {}),
     ...(canonical ? { canonical_url: canonical } : {}),
     seo: Object.keys(seo).length ? seo : null,
     ...(author && Object.keys(author).length ? { author } : {}),

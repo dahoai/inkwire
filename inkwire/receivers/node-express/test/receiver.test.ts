@@ -9,6 +9,7 @@ import { EventEmitter } from "node:events";
 import http from "node:http";
 import { Readable } from "node:stream";
 import express from "express";
+import { discoveryBody } from "inkwire-receiver-core";
 import { buildReceiver, createInkwireRouter, fetchPublicImage, isPublicAddress } from "../src/inkwire-router.js";
 
 const PNG = Buffer.from(
@@ -130,17 +131,17 @@ describe("environment", () => {
   it("GitHub store: media is off until INKWIRE_MEDIA_URL_BASE is a public absolute address", () => {
     const base = { INKWIRE_API_KEYS: "k", INKWIRE_GITHUB_REPO: "o/r", INKWIRE_GITHUB_TOKEN: "t" };
     const off = buildReceiver(base);
-    assert.equal(off.config.features?.includes("media"), false);
+    assert.equal(discoveryBody(off.config, off.store).features.includes("media"), false);
     assert.equal(off.store.saveMedia, undefined);
     assert.equal(off.mediaDir, null);
     const on = buildReceiver({ ...base, INKWIRE_MEDIA_URL_BASE: "https://cdn.example.com/m" });
-    assert.equal(on.config.features?.includes("media"), true);
+    assert.equal(discoveryBody(on.config, on.store).features.includes("media"), true);
     assert.equal(typeof on.store.saveMedia, "function");
   });
 
   it("INKWIRE_STORE chooses the store: memory has no media, github needs its settings, junk is refused", async () => {
     const mem = buildReceiver({ INKWIRE_API_KEYS: "k", INKWIRE_STORE: "memory" });
-    assert.equal(mem.config.features?.includes("media"), false);
+    assert.equal(discoveryBody(mem.config, mem.store).features.includes("media"), false);
     assert.equal(mem.store.saveMedia, undefined);
     assert.equal(mem.mediaDir, null);
     assert.throws(() => buildReceiver({ INKWIRE_API_KEYS: "k", INKWIRE_STORE: "github" }), /needs INKWIRE_GITHUB_REPO/);

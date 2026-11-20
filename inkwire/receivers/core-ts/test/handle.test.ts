@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { InkwireError, authorize, discoveryBody, handleDiscovery, parseApiKeys } from "../src/index.js";
+import { InkwireError, MemoryStore, authorize, discoveryBody, handleDiscovery, parseApiKeys } from "../src/index.js";
 import { PNG, RO, SVG, b, config, env, errCode, keys, multipart, post } from "./helpers.js";
 
 describe("every response", () => {
@@ -189,7 +189,7 @@ describe("get / list", () => {
     assert.match(r.headers.ETag!, /^".+"$/);
     const body = b(r);
     assert.equal(body.markdown, "# Post 1\n\nbody 1");
-    assert.deepEqual(body.seo, { title: "SEO title", description: "Excerpt here", image_url: "https://img.test/c.jpg", noindex: true });
+    assert.deepEqual(body.seo, { title: "SEO title", description: "Excerpt here", image_url: "https://img.test/c.jpg", noindex: true, og_title: "SEO title", og_description: "Excerpt here" });
     assert.equal(body.external_id, "ext-1");
     assert.deepEqual(body.author, { name: "Isaac" });
     assert.equal(body.canonical_url, "https://origin.test/p");
@@ -198,7 +198,7 @@ describe("get / list", () => {
   test("effective seo defaults: title, description from excerpt then title, noindex false, no image", async () => {
     const e = env();
     const a = b(await e.upsert(post(1)));
-    assert.deepEqual(b(await e.get(a.id)).seo, { title: "Post 1", description: "Post 1", noindex: false });
+    assert.deepEqual(b(await e.get(a.id)).seo, { title: "Post 1", description: "Post 1", noindex: false, og_title: "Post 1", og_description: "Post 1" });
   });
   test("get unknown id -> 404", async () => {
     const r = await env().get("no-such-id");
@@ -312,13 +312,13 @@ describe("patch", () => {
   test("seo merges per key; image_url null drops one key; null clears the object", async () => {
     const { e, id } = await one({ seo: { title: "T", description: "D" } });
     await e.patch(id, { seo: { noindex: true } });
-    assert.deepEqual(b(await e.get(id)).seo, { title: "T", description: "D", image_url: "https://i.test/c.jpg", noindex: true });
+    assert.deepEqual(b(await e.get(id)).seo, { title: "T", description: "D", image_url: "https://i.test/c.jpg", noindex: true, og_title: "T", og_description: "D" });
     await e.patch(id, { seo: { title: "T2", image_url: "https://i.test/og.jpg" } });
-    assert.deepEqual(b(await e.get(id)).seo, { title: "T2", description: "D", image_url: "https://i.test/og.jpg", noindex: true });
+    assert.deepEqual(b(await e.get(id)).seo, { title: "T2", description: "D", image_url: "https://i.test/og.jpg", noindex: true, og_title: "T2", og_description: "D" });
     await e.patch(id, { seo: { image_url: null } });
     assert.equal(b(await e.get(id)).seo.image_url, "https://i.test/c.jpg"); // back to the cover default
     await e.patch(id, { seo: null });
-    assert.deepEqual(b(await e.get(id)).seo, { title: "Post 1", description: "ex", image_url: "https://i.test/c.jpg", noindex: false });
+    assert.deepEqual(b(await e.get(id)).seo, { title: "Post 1", description: "ex", image_url: "https://i.test/c.jpg", noindex: false, og_title: "Post 1", og_description: "ex" });
   });
   test("null clears excerpt, tags, cover_image_url, canonical_url, author; published_at null resets to now", async () => {
     const { e, id } = await one({ canonical_url: "https://o.test/p", published_at: "2020-01-01T00:00:00Z" });
@@ -494,16 +494,20 @@ describe("media", () => {
 
 describe("discovery", () => {
   test("body: inkwire 1, site, features, kinds, limits", () => {
-    const d = discoveryBody(config);
+    const d = discoveryBody(config, new MemoryStore());
     assert.equal(d.inkwire, 1);
     assert.deepEqual(d.kinds, ["post", "page"]);
-    assert.deepEqual(d.features, ["upsert", "list", "get", "update", "delete", "media"]);
+    assert.deepEqual(d.features, ["upsert", "list", "get", "update", "delete", "terms", "media", "media_list", "media_update"]);
     assert.deepEqual(d.limits, { markdown_bytes: 1000, media_bytes: 4000 });
   });
-  test("explicit features win and always include upsert; media only when fetchMedia is wired; default limits", () => {
+  test("explicit features win and always include upsert; media features follow the store; schedule follows the config; default limits", () => {
     assert.deepEqual(discoveryBody({ ...config, features: ["list"] }).features, ["upsert", "list"]);
-    const { fetchMedia: _f, ...noFetch } = config;
-    assert.ok(!discoveryBody(noFetch).features.includes("media"));
+    assert.deepEqual(discoveryBody(config).features, ["upsert", "list", "get", "update", "delete", "terms"]);
+    assert.ok(discoveryBody({ ...config, schedule: true }).features.includes("schedule"));
+    assert.ok(!discoveryBody(config, new MemoryStore()).features.includes("schedule"));
+    const { saveMedia: _s, ...noUpload } = new MemoryStore() as unknown as Record<string, unknown>;
+    assert.ok(!discoveryBody(config, Object.assign(Object.create(MemoryStore.prototype), { saveMedia: undefined, listMedia: undefined, updateMedia: undefined })).features.some((f) => f.startsWith("media")));
+    void noUpload;
     assert.equal(discoveryBody({ site: config.site, kinds: ["post"] }).limits.markdown_bytes, 1_000_000);
   });
 });
@@ -526,5 +530,120 @@ describe("concurrency", () => {
     const e = env();
     const [a, c] = await Promise.all([e.upsert(post(1, { title: "Dup" })), e.upsert(post(2, { title: "Dup" }))]);
     assert.notEqual(b(a).slug, b(c).slug);
+  });
+});
+
+describe("categories, cover alt and the extra seo fields", () => {
+  test("round-trip through create, get, list and patch (null clears)", async () => {
+    const e = env();
+    const a = b(
+      await e.upsert(
+        post(1, {
+          categories: ["Guides", "How-to"],
+          cover_image_url: "https://i.test/c.jpg",
+          cover_image_alt: "A cover",
+          seo: { og_title: "OG", og_description: "OGD", json_ld: '{"@type":"FAQPage"}' },
+        }),
+      ),
+    );
+    const got = b(await e.get(a.id));
+    assert.deepEqual(got.categories, ["Guides", "How-to"]);
+    assert.equal(got.cover_image_alt, "A cover");
+    assert.deepEqual(got.seo, { title: "Post 1", description: "Post 1", image_url: "https://i.test/c.jpg", noindex: false, og_title: "OG", og_description: "OGD", json_ld: '{"@type":"FAQPage"}' });
+    assert.deepEqual(b(await e.list("category=Guides")).items.map((i: any) => i.categories), [["Guides", "How-to"]]);
+    assert.equal(b(await e.list("category=nope")).items.length, 0);
+    await e.patch(a.id, { categories: null, cover_image_alt: null, seo: { json_ld: null } });
+    const cleared = b(await e.get(a.id));
+    assert.equal(cleared.categories, undefined);
+    assert.equal(cleared.cover_image_alt, undefined);
+    assert.equal(cleared.seo.json_ld, undefined);
+    assert.equal(cleared.seo.og_title, "OG");
+  });
+  test("json_ld must be one JSON object or an array of objects", async () => {
+    const e = env();
+    for (const bad of ["{nope", '"text"', "42", "[]", "[1]", "null", "x"]) {
+      assert.equal((await e.upsert(post(1, { seo: { json_ld: bad } }))).status, 400, bad);
+    }
+    assert.equal((await e.upsert(post(2, { seo: { json_ld: '[{"@type":"A"},{"@type":"B"}]' } }))).status, 200);
+    assert.equal((await e.upsert(post(3, { seo: { og_title: "" } }))).status, 400);
+    assert.equal((await e.upsert(post(4, { categories: [""] }))).status, 400);
+  });
+});
+
+describe("terms", () => {
+  test("counts tags and categories, folds case, most used first, filters by kind and search", async () => {
+    const e = env();
+    await e.upsert(post(1, { tags: ["SEO", "ai"], categories: ["Guides"] }));
+    await e.upsert(post(2, { tags: ["seo", "SEO"], categories: ["Guides", "News"], status: "draft" }));
+    await e.upsert(post(3, { tags: ["SEO"] }));
+    const all = b(await e.terms()).items;
+    assert.deepEqual(all[0], { kind: "tag", name: "SEO", slug: "seo", count: 3 }, "the most used spelling, counted once per entry");
+    assert.deepEqual(all.map((t: any) => `${t.kind}:${t.name}:${t.count}`), ["tag:SEO:3", "category:Guides:2", "tag:ai:1", "category:News:1"]);
+    assert.deepEqual(b(await e.terms("kind=category")).items.map((t: any) => t.name), ["Guides", "News"]);
+    assert.deepEqual(b(await e.terms("search=NEW")).items.map((t: any) => t.name), ["News"]);
+    assert.equal(b(await e.terms("limit=1")).items.length, 1);
+  });
+  test("bad kind or limit -> 400; no key -> 401; a read-only key may read", async () => {
+    const e = env();
+    assert.equal((await e.terms("kind=color")).status, 400);
+    assert.equal((await e.terms("limit=0")).status, 400);
+    assert.equal((await e.terms("", null)).status, 401);
+    assert.equal((await e.terms("", RO)).status, 200);
+  });
+  test("reads past one page of entries", async () => {
+    const e = env();
+    for (let i = 0; i < 130; i++) await e.upsert(post(i, { tags: ["bulk"] }));
+    assert.equal(b(await e.terms()).items[0].count, 130);
+  });
+});
+
+describe("media library", () => {
+  const upload = async (e: ReturnType<typeof env>, alt: string) => {
+    const mp = multipart([
+      { name: "file", file: { filename: "p.png", contentType: "image/png", data: PNG } },
+      { name: "alt", value: alt },
+    ]);
+    return b(await e.media(mp.contentType, mp.body));
+  };
+  test("upload reports mime_type and created_at", async () => {
+    const m = await upload(env(), "A");
+    assert.equal(m.mime_type, "image/png");
+    assert.ok(!Number.isNaN(Date.parse(m.created_at)));
+  });
+  test("lists newest first, searches alt, pages with a cursor", async () => {
+    const e = env();
+    const a = await upload(e, "first one");
+    await new Promise((r) => setTimeout(r, 5));
+    const c = await upload(e, "second one");
+    const all = b(await e.mediaList("limit=10")).items;
+    assert.deepEqual(all.map((m: any) => m.id), [c.id, a.id]);
+    assert.deepEqual(b(await e.mediaList("search=FIRST")).items.map((m: any) => m.id), [a.id]);
+    const page = b(await e.mediaList("limit=1"));
+    assert.equal(page.items[0].id, c.id);
+    assert.deepEqual(b(await e.mediaList(`limit=1&cursor=${page.next_cursor}`)).items.map((m: any) => m.id), [a.id]);
+    assert.equal((await e.mediaList("limit=0")).status, 400);
+    assert.equal((await e.mediaList("cursor=!!!")).status, 400);
+    assert.equal((await e.mediaList("", null)).status, 401);
+    assert.equal((await e.mediaList("", RO)).status, 200);
+  });
+  test("patch sets, clears and refuses", async () => {
+    const e = env();
+    const m = await upload(e, "old");
+    const set = b(await e.mediaUpdate(m.id, { alt: "new", title: "T" }));
+    assert.deepEqual([set.alt, set.title], ["new", "T"]);
+    const cleared = b(await e.mediaUpdate(m.id, { alt: null }));
+    assert.equal(cleared.alt, undefined);
+    assert.equal(cleared.title, "T");
+    assert.equal((await e.mediaUpdate("nope", { alt: "x" })).status, 404);
+    assert.equal((await e.mediaUpdate(m.id, {})).status, 400);
+    assert.equal((await e.mediaUpdate(m.id, { url: "https://x.test/a.png" })).status, 400);
+    assert.equal((await e.mediaUpdate(m.id, "{bad")).status, 400);
+    assert.equal((await e.mediaUpdate(m.id, { alt: "x" }, RO)).status, 403);
+  });
+  test("a store without listing or editing answers 404 not_found", async () => {
+    const bare = Object.assign(Object.create(MemoryStore.prototype), { listMedia: undefined, updateMedia: undefined }) as MemoryStore;
+    const e = env(bare);
+    assert.equal((await e.mediaList()).status, 404);
+    assert.equal((await e.mediaUpdate("x", { alt: "y" })).status, 404);
   });
 });

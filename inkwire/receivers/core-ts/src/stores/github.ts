@@ -1,8 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { InkwireError } from "../errors.js";
 import { KIND_RE, RESERVED_KINDS, SLUG_FILE_RE, idFor, parseEntryFile, parseId, serializeEntry } from "../files.js";
-import { matches, pageOf, recencyKey } from "../list.js";
-import type { ContentStore, ListFilter, ListResult, MediaInput, SaveEntry, StoredContent, StoredMedia } from "../store.js";
+import { matches, pageMedia, pageOf, recencyKey } from "../list.js";
+import { MEDIA_FILE_RE, MEDIA_ID_RE, META_SUFFIX, type MediaMeta, parseMeta, patchMeta, serializeMeta, toMedia } from "../media-meta.js";
+import type { ContentStore, ListFilter, ListResult, MediaInput, MediaListFilter, MediaListResult, SaveEntry, StoredContent, StoredMedia } from "../store.js";
 
 export interface GitHubStoreOptions {
   owner: string;
@@ -47,6 +48,7 @@ export class GitHubStore implements ContentStore {
   private api: string;
   private urlFor: (e: { kind: string; slug: string }) => string;
   private cache = new Map<string, Draft | null>(); // blob sha -> parsed entry
+  private metaCache = new Map<string, MediaMeta>(); // blob sha of a media sidecar -> parsed
 
   constructor(opts: GitHubStoreOptions) {
     if (!opts.token) throw new Error("GitHubStore: token is required");
@@ -238,15 +240,75 @@ export class GitHubStore implements ContentStore {
     return this.deleteAt(this.pathFor(p.kind, p.slug));
   }
 
+  private async putFile(filePath: string, content: string | Buffer, message: string, sha?: string): Promise<string> {
+    const res = await this.gh("PUT", `/contents/${encodePath(filePath)}`, {
+      message,
+      content: b64(content),
+      branch: this.o.branch,
+      ...(sha ? { sha } : {}),
+    });
+    if (!res.ok) throw await this.failure(res, "saving media");
+    return ((await res.json()) as { content?: { sha?: string } }).content?.sha ?? "";
+  }
+
   async saveMedia(_key: string, m: MediaInput): Promise<StoredMedia> {
     const hex = randomBytes(8).toString("hex");
     const name = `${hex}-${m.filename}`;
-    const res = await this.gh("PUT", `/contents/${encodePath(`${this.prefix()}media/${name}`)}`, {
-      message: `inkwire: add media ${name}`,
-      content: b64(m.bytes),
-      branch: this.o.branch,
-    });
-    if (!res.ok) throw await this.failure(res, "saving media");
-    return { id: hex, url: `${this.mediaBase}/${name}`, ...(m.alt !== undefined ? { alt: m.alt } : {}) };
+    const meta: MediaMeta = { ...(m.alt !== undefined ? { alt: m.alt } : {}), content_type: m.contentType, created_at: new Date().toISOString() };
+    await this.putFile(`${this.prefix()}media/${name}`, m.bytes, `inkwire: add media ${name}`);
+    await this.putFile(`${this.prefix()}media/${name}${META_SUFFIX}`, serializeMeta(meta), `inkwire: describe media ${name}`);
+    return toMedia(hex, `${this.mediaBase}/${name}`, meta);
+  }
+
+  /** Every uploaded image in the media folder, with the blob sha of its sidecar when it has one. */
+  private async mediaFiles(): Promise<{ name: string; metaSha?: string }[]> {
+    const treeRes = await this.gh("GET", `/git/trees/${encodeURIComponent(this.o.branch)}?recursive=1`);
+    if (treeRes.status === 404) return [];
+    if (!treeRes.ok) throw await this.failure(treeRes, "listing media");
+    const tree = (await treeRes.json()) as { tree?: { path: string; type: string; sha: string }[]; truncated?: boolean };
+    if (tree.truncated) throw new InkwireError("internal", "the repository is too large to list through the trees API");
+    const base = `${this.prefix()}media/`;
+    const shas = new Map<string, string>();
+    for (const t of tree.tree ?? []) if (t.type === "blob" && t.path.startsWith(base) && !t.path.slice(base.length).includes("/")) shas.set(t.path.slice(base.length), t.sha);
+    const out: { name: string; metaSha?: string }[] = [];
+    for (const [name] of shas) {
+      if (name.endsWith(META_SUFFIX) || !MEDIA_FILE_RE.test(name)) continue;
+      const metaSha = shas.get(`${name}${META_SUFFIX}`);
+      out.push({ name, ...(metaSha ? { metaSha } : {}) });
+    }
+    return out;
+  }
+
+  private async readMeta(name: string, metaSha: string | undefined): Promise<MediaMeta> {
+    if (!metaSha) return parseMeta(null, name, EPOCH);
+    const hit = this.metaCache.get(metaSha);
+    if (hit) return hit;
+    const blob = await this.gh("GET", `/git/blobs/${encodeURIComponent(metaSha)}`, undefined, "application/vnd.github.raw+json");
+    if (!blob.ok) throw await this.failure(blob, "reading media");
+    const meta = parseMeta(await blob.text(), name, EPOCH);
+    if (this.metaCache.size >= CACHE_MAX) this.metaCache.delete(this.metaCache.keys().next().value as string);
+    this.metaCache.set(metaSha, meta);
+    return meta;
+  }
+
+  async listMedia(_key: string, filter: MediaListFilter): Promise<MediaListResult> {
+    const files = await this.mediaFiles();
+    const all: StoredMedia[] = [];
+    for (let i = 0; i < files.length; i += CONCURRENCY) {
+      const chunk = files.slice(i, i + CONCURRENCY);
+      const metas = await Promise.all(chunk.map((f) => this.readMeta(f.name, f.metaSha)));
+      chunk.forEach((f, j) => all.push(toMedia(MEDIA_FILE_RE.exec(f.name)![1]!, `${this.mediaBase}/${f.name}`, metas[j]!)));
+    }
+    return pageMedia(all, filter);
+  }
+
+  async updateMedia(_key: string, id: string, patch: { alt?: string | null; title?: string | null }): Promise<StoredMedia | null> {
+    if (!MEDIA_ID_RE.test(id)) return null;
+    const file = (await this.mediaFiles()).find((f) => f.name.startsWith(`${id}-`));
+    if (!file) return null;
+    const cur = await this.readMeta(file.name, file.metaSha);
+    const meta = patchMeta(cur, patch);
+    await this.putFile(`${this.prefix()}media/${file.name}${META_SUFFIX}`, serializeMeta(meta), `inkwire: describe media ${file.name}`, file.metaSha);
+    return toMedia(id, `${this.mediaBase}/${file.name}`, meta);
   }
 }

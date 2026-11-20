@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { matches, pageOf, recencyKey } from "../list.js";
-import type { ContentStore, ListFilter, ListResult, MediaInput, SaveEntry, StoredContent, StoredMedia } from "../store.js";
+import { matches, pageMedia, pageOf, recencyKey } from "../list.js";
+import { patchMeta, toMedia } from "../media-meta.js";
+import type { ContentStore, ListFilter, ListResult, MediaInput, MediaListFilter, MediaListResult, SaveEntry, StoredContent, StoredMedia } from "../store.js";
 
 export interface MemoryStoreOptions {
   /** Public address of an entry. Default `https://example.test/<kind>/<slug>`. */
@@ -49,10 +50,26 @@ export class MemoryStore implements ContentStore {
   async saveMedia(key: string, m: MediaInput): Promise<StoredMedia> {
     const id = randomBytes(8).toString("hex");
     const url = `${this.opts.mediaUrlBase ?? "https://example.test/media"}/${id}-${m.filename}`;
-    const saved: StoredMedia = { id, url, ...(m.alt !== undefined ? { alt: m.alt } : {}) };
+    const saved = toMedia(id, url, { ...(m.alt !== undefined ? { alt: m.alt } : {}), content_type: m.contentType, created_at: new Date().toISOString() });
     let bucket = this.media.get(key);
     if (!bucket) this.media.set(key, (bucket = new Map()));
     bucket.set(id, { ...saved, bytes: m.bytes, contentType: m.contentType });
     return saved;
+  }
+
+  async listMedia(key: string, filter: MediaListFilter): Promise<MediaListResult> {
+    const all = [...(this.media.get(key)?.values() ?? [])].map(({ bytes: _b, contentType: _c, ...m }) => m);
+    return pageMedia(all, filter);
+  }
+
+  async updateMedia(key: string, id: string, patch: { alt?: string | null; title?: string | null }): Promise<StoredMedia | null> {
+    const cur = this.media.get(key)?.get(id);
+    if (!cur) return null;
+    const meta = patchMeta({ ...(cur.alt !== undefined ? { alt: cur.alt } : {}), ...(cur.title !== undefined ? { title: cur.title } : {}), content_type: cur.mime_type, created_at: cur.created_at }, patch);
+    const { bytes, contentType } = cur;
+    const next = { ...toMedia(id, cur.url, meta), bytes, contentType };
+    this.media.get(key)!.set(id, next);
+    const { bytes: _b, contentType: _c, ...out } = next;
+    return out;
   }
 }

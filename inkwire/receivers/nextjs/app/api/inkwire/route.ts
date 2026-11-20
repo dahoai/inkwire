@@ -6,6 +6,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const { keys, config } = getInkwire();
-  return toResponse(await handleDiscovery({ authHeader: req.headers.get("authorization"), keys, config }));
+  const { keys, config, store } = getInkwire();
+  return toResponse(await handleDiscovery({ authHeader: req.headers.get("authorization"), keys, config, store }));
 }

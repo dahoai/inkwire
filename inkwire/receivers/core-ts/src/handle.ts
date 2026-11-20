@@ -3,9 +3,10 @@ import { InkwireError } from "./errors.js";
 import { withLock } from "./lock.js";
 import { assertImage, parseMultipart, safeFilename } from "./media.js";
 import { renderMarkdown, slugify } from "./render.js";
-import { ContentInput, MediaUrlInput, PatchSchema } from "./schema.js";
+import { ContentInput, MediaPatchSchema, MediaUrlInput, PatchSchema } from "./schema.js";
 import { cleanOverrides, effectiveSeo, mergeOverrides } from "./seo.js";
-import type { ContentStore, SaveEntry, StoredContent } from "./store.js";
+import { pageMedia } from "./list.js";
+import type { ContentStore, SaveEntry, StoredContent, StoredMedia } from "./store.js";
 
 export const INKWIRE_VERSION = "1";
 export const MAX_PAGE = 100;
@@ -19,12 +20,17 @@ export interface FetchedMedia {
 }
 
 export interface InkwireConfig {
-  site: { name: string; url: string };
+  site: { name: string; url: string; description?: string; language?: string };
   /** The kinds this receiver holds. */
   kinds: string[];
   limits?: { markdown_bytes?: number; media_bytes?: number };
-  /** What discovery advertises; derived from the config when omitted. `upsert` is always added. */
+  /** What discovery advertises; derived from the store and this config when omitted. `upsert` is always added. */
   features?: string[];
+  /**
+   * True when the site holds a `published` entry back until its `published_at` (it renders future-dated
+   * entries as not yet public). Advertises `schedule`; leave it off if the site would show them at once.
+   */
+  schedule?: boolean;
   /**
    * Fetches a URL for `POST /api/media` `{url}`. MUST be SSRF-guarded by whoever supplies it (public
    * http(s) hosts only, redirects re-checked): the core only checks the URL is http(s).
@@ -121,6 +127,7 @@ function summary(e: StoredContent) {
     status: e.status,
     ...(e.excerpt !== undefined ? { excerpt: e.excerpt } : {}),
     ...(e.tags !== undefined ? { tags: e.tags } : {}),
+    ...(e.categories !== undefined ? { categories: e.categories } : {}),
     published_at: e.published_at,
     updated_at: e.updated_at,
   };
@@ -131,6 +138,7 @@ function full(e: StoredContent) {
     ...summary(e),
     markdown: e.markdown,
     ...(e.cover_image_url !== undefined ? { cover_image_url: e.cover_image_url } : {}),
+    ...(e.cover_image_alt !== undefined ? { cover_image_alt: e.cover_image_alt } : {}),
     ...(e.canonical_url !== undefined ? { canonical_url: e.canonical_url } : {}),
     ...(e.author !== undefined ? { author: e.author } : {}),
     seo: effectiveSeo(e),
@@ -165,6 +173,14 @@ async function assertSlugFree(store: ContentStore, scope: string, kind: string, 
   if (owner && owner.id !== selfId) {
     throw new InkwireError("conflict", `slug "${slug}" is already used by another ${kind}`);
   }
+}
+
+function parseLimit(query: URLSearchParams, fallback: number, max: number): number {
+  const raw = query.get("limit");
+  if (raw === null || raw === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) throw new InkwireError("invalid_payload", "limit must be a positive integer");
+  return Math.min(n, max);
 }
 
 const authedWrite = (authHeader: string | null | undefined, keys: ApiKey[]) => {
@@ -222,7 +238,9 @@ export function handleUpsert({ authHeader, rawBody, keys, store, config }: Upser
         html: renderMarkdown(input.markdown),
         ...(input.excerpt !== undefined ? { excerpt: input.excerpt } : {}),
         ...(input.tags !== undefined ? { tags: input.tags } : {}),
+        ...(input.categories !== undefined ? { categories: input.categories } : {}),
         ...(input.cover_image_url !== undefined ? { cover_image_url: input.cover_image_url } : {}),
+        ...(input.cover_image_alt !== undefined ? { cover_image_alt: input.cover_image_alt } : {}),
         ...(input.canonical_url !== undefined ? { canonical_url: input.canonical_url } : {}),
         seo: cleanOverrides(input.seo),
         ...(input.author !== undefined ? { author: input.author } : {}),
@@ -266,17 +284,12 @@ export function handleList({ authHeader, query, keys, store }: ListArgs): Promis
     if (status !== undefined && status !== "draft" && status !== "published") {
       throw new InkwireError("invalid_payload", 'status must be "draft" or "published"');
     }
-    let limit = DEFAULT_PAGE;
-    const rawLimit = query.get("limit");
-    if (rawLimit !== null && rawLimit !== "") {
-      const n = Number(rawLimit);
-      if (!Number.isInteger(n) || n < 1) throw new InkwireError("invalid_payload", "limit must be a positive integer");
-      limit = Math.min(n, MAX_PAGE);
-    }
+    const limit = parseLimit(query, DEFAULT_PAGE, MAX_PAGE);
     const result = await store.list(key.scope, {
       ...(status ? { status } : {}),
       ...(query.get("kind") ? { kind: query.get("kind")! } : {}),
       ...(query.get("tag") ? { tag: query.get("tag")! } : {}),
+      ...(query.get("category") ? { category: query.get("category")! } : {}),
       ...(query.get("search") ? { search: query.get("search")! } : {}),
       ...(query.get("external_id") ? { external_id: query.get("external_id")! } : {}),
       ...(query.get("slug") ? { slug: query.get("slug")! } : {}),
@@ -364,7 +377,7 @@ export function handlePatch({ authHeader, id, rawBody, ifMatchHeader, keys, stor
         updated_at: now,
         version: current.version + 1,
       };
-      const optional = ["excerpt", "tags", "cover_image_url", "canonical_url", "author"] as const;
+      const optional = ["excerpt", "tags", "categories", "cover_image_url", "cover_image_alt", "canonical_url", "author"] as const;
       for (const f of optional) {
         const v = f in patch ? (patch as Record<string, unknown>)[f] : (current as unknown as Record<string, unknown>)[f];
         if (v !== null && v !== undefined) (next as unknown as Record<string, unknown>)[f] = v;
@@ -460,15 +473,145 @@ export function handleMedia({ authHeader, contentType, rawBody, keys, config, st
       filename: safeFilename(filename, imageType),
       ...(alt !== undefined && alt !== "" ? { alt } : {}),
     });
-    return ok({ id: saved.id, url: saved.url, ...(saved.alt !== undefined ? { alt: saved.alt } : {}) });
+    return ok(mediaItem(saved));
+  });
+}
+
+const mediaItem = (m: StoredMedia) => ({
+  id: m.id,
+  url: m.url,
+  ...(m.alt !== undefined ? { alt: m.alt } : {}),
+  ...(m.title !== undefined ? { title: m.title } : {}),
+  mime_type: m.mime_type,
+  created_at: m.created_at,
+});
+
+// ---------------------------------------------------------------------------------------------
+// GET /api/media
+
+export interface MediaListArgs {
+  authHeader: string | null | undefined;
+  query: URLSearchParams;
+  keys: ApiKey[];
+  store: ContentStore;
+}
+
+export function handleMediaList({ authHeader, query, keys, store }: MediaListArgs): Promise<HandlerResult> {
+  return guarded(async () => {
+    const key = authorize(authHeader, keys);
+    if (!store.listMedia) throw new InkwireError("not_found", "this receiver does not list its media library");
+    const limit = parseLimit(query, DEFAULT_PAGE, MAX_PAGE);
+    const result = await store.listMedia(key.scope, {
+      ...(query.get("search") ? { search: query.get("search")! } : {}),
+      limit,
+      ...(query.get("cursor") ? { cursor: query.get("cursor")! } : {}),
+    });
+    return ok({ items: result.items.map(mediaItem), next_cursor: result.next_cursor });
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// PATCH /api/media/{id}
+
+export interface MediaUpdateArgs {
+  authHeader: string | null | undefined;
+  id: string;
+  rawBody: string | Buffer;
+  keys: ApiKey[];
+  store: ContentStore;
+}
+
+export function handleMediaUpdate({ authHeader, id, rawBody, keys, store }: MediaUpdateArgs): Promise<HandlerResult> {
+  return guarded(async () => {
+    const key = authedWrite(authHeader, keys);
+    if (!store.updateMedia) throw new InkwireError("not_found", "this receiver does not edit its media library");
+    if (rawBody.length > 100_000) throw new InkwireError("too_large", "the body is over the limit");
+    const patch = validate(MediaPatchSchema, parseJson(rawBody));
+    const saved = await store.updateMedia(key.scope, id, patch);
+    if (!saved) throw new InkwireError("not_found", `no media with id "${id}"`);
+    return ok(mediaItem(saved));
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// GET /api/terms
+
+export interface TermsArgs {
+  authHeader: string | null | undefined;
+  query: URLSearchParams;
+  keys: ApiKey[];
+  store: ContentStore;
+}
+
+const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+const MAX_TERMS = 500;
+const DEFAULT_TERMS = 100;
+/** Entries read to count terms; a site past this reports counts for its newest entries. */
+const TERMS_SCAN_CAP = 10_000;
+
+export function handleTerms({ authHeader, query, keys, store }: TermsArgs): Promise<HandlerResult> {
+  return guarded(async () => {
+    const key = authorize(authHeader, keys);
+    const kind = query.get("kind") || undefined;
+    if (kind !== undefined && kind !== "tag" && kind !== "category") {
+      throw new InkwireError("invalid_payload", 'kind must be "tag" or "category"');
+    }
+    const limit = parseLimit(query, DEFAULT_TERMS, MAX_TERMS);
+    const search = (query.get("search") ?? "").toLowerCase();
+
+    // name (lowercased) -> total, and how often each spelling appears.
+    const seen = new Map<string, { kind: "tag" | "category"; total: number; spellings: Map<string, number> }>();
+    const add = (k: "tag" | "category", names: string[] | undefined) => {
+      const byLower = new Map<string, string>();
+      for (const n of names ?? []) if (!byLower.has(n.toLowerCase())) byLower.set(n.toLowerCase(), n);
+      for (const name of byLower.values()) {
+        const id = `${k}:${name.toLowerCase()}`;
+        const t = seen.get(id) ?? { kind: k, total: 0, spellings: new Map() };
+        t.total++;
+        t.spellings.set(name, (t.spellings.get(name) ?? 0) + 1);
+        seen.set(id, t);
+      }
+    };
+    let cursor: string | undefined;
+    let scanned = 0;
+    do {
+      const page = await store.list(key.scope, { limit: MAX_PAGE, ...(cursor ? { cursor } : {}) });
+      for (const e of page.items) {
+        if (kind !== "category") add("tag", e.tags);
+        if (kind !== "tag") add("category", e.categories);
+      }
+      scanned += page.items.length;
+      cursor = page.next_cursor ?? undefined;
+    } while (cursor && scanned < TERMS_SCAN_CAP);
+
+    const items = [...seen.values()]
+      .map((t) => {
+        const name = [...t.spellings.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0]![0];
+        return { kind: t.kind, name, slug: slugify(name), count: t.total };
+      })
+      .filter((t) => !search || t.name.toLowerCase().includes(search))
+      .sort((a, b) => b.count - a.count || cmp(a.name.toLowerCase(), b.name.toLowerCase()) || cmp(a.name, b.name))
+      .slice(0, limit);
+    return ok({ items });
   });
 }
 
 // ---------------------------------------------------------------------------------------------
 // GET /api/inkwire
 
-export function discoveryBody(config: InkwireConfig) {
-  const derived = ["upsert", "list", "get", "update", "delete", ...(config.fetchMedia ? ["media"] : [])];
+export function discoveryBody(config: InkwireConfig, store?: ContentStore) {
+  const derived = [
+    "upsert",
+    "list",
+    "get",
+    "update",
+    "delete",
+    "terms",
+    ...(config.schedule ? ["schedule"] : []),
+    ...(store?.saveMedia ? ["media"] : []),
+    ...(store?.listMedia ? ["media_list"] : []),
+    ...(store?.updateMedia ? ["media_update"] : []),
+  ];
   const features = [...new Set(["upsert", ...(config.features ?? derived)])];
   return {
     inkwire: 1,
@@ -483,12 +626,14 @@ export interface DiscoveryArgs {
   authHeader: string | null | undefined;
   keys: ApiKey[];
   config: InkwireConfig;
+  /** Lets discovery advertise the media features the store really has. */
+  store?: ContentStore;
 }
 
 /** The authenticated discovery response. Adapters may also call `discoveryBody` directly. */
-export function handleDiscovery({ authHeader, keys, config }: DiscoveryArgs): Promise<HandlerResult> {
+export function handleDiscovery({ authHeader, keys, config, store }: DiscoveryArgs): Promise<HandlerResult> {
   return guarded(async () => {
     authorize(authHeader, keys);
-    return ok(discoveryBody(config));
+    return ok(discoveryBody(config, store));
   });
 }

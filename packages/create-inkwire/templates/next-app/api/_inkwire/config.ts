@@ -232,7 +232,8 @@ export function buildReceiver(env: NodeJS.ProcessEnv = process.env): Receiver {
   let store: ContentStore;
   let mediaDir: string | null = null;
   let media = true;
-  const withoutMedia = (s: ContentStore): ContentStore => new Proxy(s, { get: (t, p) => (p === "saveMedia" ? undefined : Reflect.get(t, p)) });
+  const MEDIA_METHODS = new Set<string | symbol>(["saveMedia", "listMedia", "updateMedia"]);
+  const withoutMedia = (s: ContentStore): ContentStore => new Proxy(s, { get: (t, p) => (MEDIA_METHODS.has(p) ? undefined : Reflect.get(t, p)) });
   if (kind === "github") {
     const [owner, name] = (repo as string).split("/");
     if (!owner || !name) throw new Error("INKWIRE_GITHUB_REPO must look like owner/name");
@@ -260,13 +261,19 @@ export function buildReceiver(env: NodeJS.ProcessEnv = process.env): Receiver {
   }
 
   const config: InkwireConfig = {
-    site: { name: env.INKWIRE_SITE_NAME ?? "This site", url: siteUrl },
+    site: {
+      name: env.INKWIRE_SITE_NAME ?? "This site",
+      url: siteUrl,
+      ...(env.INKWIRE_SITE_DESCRIPTION ? { description: env.INKWIRE_SITE_DESCRIPTION } : {}),
+      ...(env.INKWIRE_SITE_LANGUAGE ? { language: env.INKWIRE_SITE_LANGUAGE } : {}),
+    },
     kinds: (env.INKWIRE_KINDS ?? "post,page")
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
     limits: { markdown_bytes: markdownBytes, media_bytes: mediaBytes },
-    features: ["upsert", "list", "get", "update", "delete", ...(media ? ["media"] : [])],
+    // Only true when the site itself holds a future-dated published entry back (see SPEC "Scheduling").
+    ...(/^(1|true|yes)$/i.test(env.INKWIRE_SCHEDULE ?? "") ? { schedule: true } : {}),
     ...(media ? { fetchMedia: (url: string) => fetchPublicImage(url, mediaBytes) } : {}),
   };
   let mediaPath: string | null = null;

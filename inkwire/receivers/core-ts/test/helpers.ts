@@ -7,6 +7,9 @@ import {
   handleGet,
   handleList,
   handleMedia,
+  handleMediaList,
+  handleMediaUpdate,
+  handleTerms,
   handlePatch,
   handleUpsert,
   parseApiKeys,
@@ -46,7 +49,11 @@ export function env(store: ContentStore = new MemoryStore()) {
     handleDelete({ authHeader: auth ?? undefined, id, ifMatchHeader: ifMatch, keys, store });
   const media = (contentType: string | undefined, rawBody: Buffer | string, auth: string | null = FULL) =>
     handleMedia({ authHeader: auth ?? undefined, contentType, rawBody, keys, config, store });
-  return { store, upsert, list, get, patch, del, media };
+  const terms = (qs = "", auth: string | null = FULL) => handleTerms({ authHeader: auth ?? undefined, query: new URLSearchParams(qs), keys, store });
+  const mediaList = (qs = "", auth: string | null = FULL) => handleMediaList({ authHeader: auth ?? undefined, query: new URLSearchParams(qs), keys, store });
+  const mediaUpdate = (id: string, body: unknown, auth: string | null = FULL) =>
+    handleMediaUpdate({ authHeader: auth ?? undefined, id, rawBody: typeof body === "string" ? body : JSON.stringify(body), keys, store });
+  return { store, upsert, list, get, patch, del, media, terms, mediaList, mediaUpdate };
 }
 
 export const post = (n: number | string, extra: Record<string, unknown> = {}) => ({

@@ -42,6 +42,7 @@ export interface StoreContractOptions {
   expectUrl?: (e: { kind: string; slug: string }) => string;
 }
 
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
 const T0 = Date.parse("2026-07-22T04:00:00.000Z");
 const iso = (minutes: number) => new Date(T0 + minutes * 60_000).toISOString();
 
@@ -84,7 +85,7 @@ export function runStoreContract(o: StoreContractOptions): void {
   describe(`Inkwire store contract: ${o.name}`, () => {
     test("save creates an entry; get returns it with an id, the scope, a url and an etag", () =>
       withStore(async (store) => {
-        const saved = await store.save(A, entry({ tags: ["seo", "ai"], excerpt: "Short", cover_image_url: "https://x.test/c.jpg", canonical_url: "https://x.test/p", author: { name: "Isaac", email: "i@x.test" }, seo: { title: "T", noindex: true } }));
+        const saved = await store.save(A, entry({ tags: ["seo", "ai"], categories: ["Guides", "News"], excerpt: "Short", cover_image_url: "https://x.test/c.jpg", cover_image_alt: "A cover", canonical_url: "https://x.test/p", author: { name: "Isaac", email: "i@x.test" }, seo: { title: "T", noindex: true, og_title: "OG", og_description: "OGD", json_ld: '{"@type":"FAQPage"}' } }));
         assert.ok(saved.id, "id");
         assert.equal(saved.key, A);
         assert.ok(saved.url, "url");
@@ -92,11 +93,13 @@ export function runStoreContract(o: StoreContractOptions): void {
         assert.ok(saved.etag, "etag");
         const got = await store.get(A, saved.id);
         assert.ok(got);
-        for (const k of ["external_id", "kind", "title", "slug", "markdown", "html", "excerpt", "tags", "cover_image_url", "canonical_url", "seo", "author", "status", "published_at", "updated_at", "version"] as const) {
+        for (const k of ["external_id", "kind", "title", "slug", "markdown", "html", "excerpt", "tags", "categories", "cover_image_url", "cover_image_alt", "canonical_url", "seo", "author", "status", "published_at", "updated_at", "version"] as const) {
           assert.deepEqual(got[k], saved[k], `get() and save() agree on ${k}`);
         }
         assert.deepEqual(got.tags, ["seo", "ai"]);
-        assert.deepEqual(got.seo, { title: "T", noindex: true });
+        assert.deepEqual(got.categories, ["Guides", "News"]);
+        assert.equal(got.cover_image_alt, "A cover");
+        assert.deepEqual(got.seo, { title: "T", noindex: true, og_title: "OG", og_description: "OGD", json_ld: '{"@type":"FAQPage"}' });
         assert.deepEqual(got.author, { name: "Isaac", email: "i@x.test" });
         assert.equal(got.published_at, iso(0), "dates come back as the same ISO string");
       }));
@@ -110,7 +113,7 @@ export function runStoreContract(o: StoreContractOptions): void {
       withStore(async (store) => {
         const saved = await store.save(A, entry());
         const got = (await store.get(A, saved.id)) as StoredContent;
-        for (const k of ["excerpt", "tags", "cover_image_url", "canonical_url", "author"] as const) {
+        for (const k of ["excerpt", "tags", "categories", "cover_image_url", "cover_image_alt", "canonical_url", "author"] as const) {
           assert.equal(got[k], undefined, `${k} must be undefined, not ${JSON.stringify(got[k])} (map a NULL column to undefined)`);
         }
         assert.equal(got.seo, null, "seo is null when there are no overrides");
@@ -153,7 +156,7 @@ export function runStoreContract(o: StoreContractOptions): void {
 
     test("list filters: status, kind, tag, search, external_id, slug", () =>
       withStore(async (store) => {
-        await store.save(A, entry({ slug: "one", external_id: "e1", title: "The Needle", tags: ["a", "b"] }));
+        await store.save(A, entry({ slug: "one", external_id: "e1", title: "The Needle", tags: ["a", "b"], categories: ["Guides"] }));
         await store.save(A, entry({ slug: "two", external_id: "e2", status: "draft", kind: o.singleKind ? "post" : "page", markdown: "haystack with a NEEDLE inside", updated_at: iso(1) }));
         await store.save(A, entry({ slug: "three", external_id: "e3", excerpt: "needle in the excerpt", tags: ["b"], updated_at: iso(2) }));
         const slugs = async (f: Parameters<ContentStore["list"]>[1]) => (await store.list(A, f)).items.map((e) => e.slug).sort();
@@ -162,6 +165,8 @@ export function runStoreContract(o: StoreContractOptions): void {
         assert.deepEqual(await slugs({ kind: "page", limit: 10 }), o.singleKind ? [] : ["two"]);
         assert.deepEqual(await slugs({ tag: "b", limit: 10 }), ["one", "three"]);
         assert.deepEqual(await slugs({ tag: "nope", limit: 10 }), []);
+        assert.deepEqual(await slugs({ category: "Guides", limit: 10 }), ["one"]);
+        assert.deepEqual(await slugs({ category: "guides", limit: 10 }), [], "category matches exactly");
         assert.deepEqual(await slugs({ search: "needle", limit: 10 }), ["one", "three", "two"], "case-insensitive over title, excerpt and markdown");
         assert.deepEqual(await slugs({ external_id: "e2", limit: 10 }), ["two"], "exact external_id");
         assert.deepEqual(await slugs({ external_id: "e", limit: 10 }), [], "external_id is not a prefix match");
@@ -234,13 +239,53 @@ export function runStoreContract(o: StoreContractOptions): void {
     test("saveMedia (when the store has it) returns an id and a url, and keeps the alt text", () =>
       withStore(async (store) => {
         if (!store.saveMedia) return;
-        const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
-        const m = await store.saveMedia(A, { bytes: png, contentType: "image/png", filename: "px.png", alt: "One pixel" });
+        const m = await store.saveMedia(A, { bytes: PNG, contentType: "image/png", filename: "px.png", alt: "One pixel" });
         assert.ok(m.id && m.url);
         assert.equal(m.alt, "One pixel");
-        const bare = await store.saveMedia(A, { bytes: png, contentType: "image/png", filename: "px.png" });
+        assert.equal(m.mime_type, "image/png");
+        assert.ok(!Number.isNaN(Date.parse(m.created_at)), "created_at is a timestamp");
+        const bare = await store.saveMedia(A, { bytes: PNG, contentType: "image/png", filename: "px.png" });
         assert.equal(bare.alt, undefined);
         assert.notEqual(bare.id, m.id);
+      }));
+
+    test("listMedia (when the store has it): newest first, search over alt, title and filename, stable paging", () =>
+      withStore(async (store) => {
+        if (!store.saveMedia || !store.listMedia) return;
+        const ids: string[] = [];
+        for (const [i, alt] of ["alpha", "beta", "gamma"].entries()) {
+          ids.push((await store.saveMedia(A, { bytes: PNG, contentType: "image/png", filename: `${alt}-file.png`, alt: `${alt} alt` })).id);
+          if (i < 2) await new Promise((r) => setTimeout(r, 15));
+        }
+        const all = await store.listMedia(A, { limit: 10 });
+        assert.deepEqual(all.items.map((m) => m.id), [ids[2], ids[1], ids[0]], "newest first");
+        assert.equal(all.next_cursor, null);
+        assert.deepEqual((await store.listMedia(A, { search: "BETA", limit: 10 })).items.map((m) => m.id), [ids[1]], "alt, case-insensitive");
+        assert.deepEqual((await store.listMedia(A, { search: "gamma-file", limit: 10 })).items.map((m) => m.id), [ids[2]], "filename");
+        const first = await store.listMedia(A, { limit: 2 });
+        assert.equal(first.items.length, 2);
+        assert.ok(first.next_cursor);
+        const second = await store.listMedia(A, { limit: 2, cursor: first.next_cursor! });
+        assert.deepEqual([...first.items, ...second.items].map((m) => m.id), [ids[2], ids[1], ids[0]]);
+        assert.equal(second.next_cursor, null);
+        await assert.rejects(() => store.listMedia!(A, { limit: 2, cursor: "!!!" }), (e: { code?: string }) => e.code === "invalid_payload");
+      }));
+
+    test("updateMedia (when the store has it) sets, clears and keeps; an unknown id is null", () =>
+      withStore(async (store) => {
+        if (!store.saveMedia || !store.updateMedia) return;
+        const m = await store.saveMedia(A, { bytes: PNG, contentType: "image/png", filename: "px.png", alt: "old" });
+        const set = await store.updateMedia(A, m.id, { alt: "new", title: "A title" });
+        assert.deepEqual([set?.alt, set?.title, set?.id, set?.url, set?.mime_type, set?.created_at], ["new", "A title", m.id, m.url, "image/png", m.created_at]);
+        const cleared = await store.updateMedia(A, m.id, { alt: null });
+        assert.equal(cleared?.alt, undefined);
+        assert.equal(cleared?.title, "A title", "an absent key keeps its value");
+        if (store.listMedia) {
+          const listed = (await store.listMedia(A, { limit: 10 })).items.find((x) => x.id === m.id);
+          assert.deepEqual([listed?.alt, listed?.title], [undefined, "A title"], "the library shows the edit");
+        }
+        assert.equal(await store.updateMedia(A, "0123456789abcdef", { alt: "x" }), null);
+        assert.equal(await store.updateMedia(A, "../../etc/passwd", { alt: "x" }), null, "a hostile id never reaches a path");
       }));
   });
 }

@@ -4,7 +4,7 @@
 //   app.use(createInkwireRouter());
 // Configuration is environment variables only; see the README. Express 4 or 5.
 import express from "express";
-import { handleDelete, handleDiscovery, handleGet, handleList, handleMedia, handlePatch, handleUpsert, } from "inkwire-receiver-core";
+import { handleDelete, handleDiscovery, handleGet, handleList, handleMedia, handleMediaList, handleMediaUpdate, handleTerms, handlePatch, handleUpsert, } from "inkwire-receiver-core";
 // <inkwire:shared> (identical in the Next.js receiver; `create-inkwire`'s sync script keeps them equal)
 import dns from "node:dns";
 import http from "node:http";
@@ -225,7 +225,8 @@ export function buildReceiver(env = process.env) {
     let store;
     let mediaDir = null;
     let media = true;
-    const withoutMedia = (s) => new Proxy(s, { get: (t, p) => (p === "saveMedia" ? undefined : Reflect.get(t, p)) });
+    const MEDIA_METHODS = new Set(["saveMedia", "listMedia", "updateMedia"]);
+    const withoutMedia = (s) => new Proxy(s, { get: (t, p) => (MEDIA_METHODS.has(p) ? undefined : Reflect.get(t, p)) });
     if (kind === "github") {
         const [owner, name] = repo.split("/");
         if (!owner || !name)
@@ -255,13 +256,19 @@ export function buildReceiver(env = process.env) {
         store = new FileStore({ root, mediaUrlBase, urlFor });
     }
     const config = {
-        site: { name: env.INKWIRE_SITE_NAME ?? "This site", url: siteUrl },
+        site: {
+            name: env.INKWIRE_SITE_NAME ?? "This site",
+            url: siteUrl,
+            ...(env.INKWIRE_SITE_DESCRIPTION ? { description: env.INKWIRE_SITE_DESCRIPTION } : {}),
+            ...(env.INKWIRE_SITE_LANGUAGE ? { language: env.INKWIRE_SITE_LANGUAGE } : {}),
+        },
         kinds: (env.INKWIRE_KINDS ?? "post,page")
             .split(",")
             .map((s) => s.trim())
             .filter(Boolean),
         limits: { markdown_bytes: markdownBytes, media_bytes: mediaBytes },
-        features: ["upsert", "list", "get", "update", "delete", ...(media ? ["media"] : [])],
+        // Only true when the site itself holds a future-dated published entry back (see SPEC "Scheduling").
+        ...(/^(1|true|yes)$/i.test(env.INKWIRE_SCHEDULE ?? "") ? { schedule: true } : {}),
         ...(media ? { fetchMedia: (url) => fetchPublicImage(url, mediaBytes) } : {}),
     };
     let mediaPath = null;
@@ -310,12 +317,15 @@ export function createInkwireRouter(env = process.env) {
         }
     };
     // Everything below is served by `inkwire-receiver-core`; this file only moves HTTP in and out.
-    router.get("/api/inkwire", run((req) => handleDiscovery({ authHeader: authHeader(req), keys, config })));
+    router.get("/api/inkwire", run((req) => handleDiscovery({ authHeader: authHeader(req), keys, config, store })));
     router.post("/api/content", jsonBody, run((req) => handleUpsert({ authHeader: authHeader(req), rawBody: bodyOf(req), keys, store, config })));
     router.get("/api/content", run((req) => handleList({ authHeader: authHeader(req), query: new URL(req.originalUrl, "http://x").searchParams, keys, store, config })));
     router.get("/api/content/:id", run((req) => handleGet({ authHeader: authHeader(req), id: idOf(req), keys, store })));
     router.patch("/api/content/:id", jsonBody, run((req) => handlePatch({ authHeader: authHeader(req), id: idOf(req), rawBody: bodyOf(req), ifMatchHeader: req.header("if-match"), keys, store, config })));
     router.delete("/api/content/:id", run((req) => handleDelete({ authHeader: authHeader(req), id: idOf(req), ifMatchHeader: req.header("if-match"), keys, store })));
+    router.get("/api/terms", run((req) => handleTerms({ authHeader: authHeader(req), query: new URL(req.originalUrl, "http://x").searchParams, keys, store })));
+    router.get("/api/media", run((req) => handleMediaList({ authHeader: authHeader(req), query: new URL(req.originalUrl, "http://x").searchParams, keys, store })));
+    router.patch("/api/media/:id", jsonBody, run((req) => handleMediaUpdate({ authHeader: authHeader(req), id: idOf(req), rawBody: bodyOf(req), keys, store })));
     router.post("/api/media", mediaBody, run((req) => {
         const b = bodyOf(req);
         return handleMedia({ authHeader: authHeader(req), contentType: req.header("content-type"), rawBody: b, keys, store, config });

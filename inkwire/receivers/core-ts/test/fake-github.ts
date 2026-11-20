@@ -11,7 +11,7 @@ export interface Call {
   body?: any;
 }
 
-/** A tiny in-memory GitHub: contents GET/PUT/DELETE and the recursive tree, with real blob shas. */
+/** A tiny in-memory GitHub: contents GET/PUT/DELETE, raw blobs and the recursive tree, with real blob shas. */
 export function fakeGitHub(initial: Record<string, string> = {}) {
   const files = new Map<string, string>(Object.entries(initial));
   const calls: Call[] = [];
@@ -60,6 +60,11 @@ export function fakeGitHub(initial: Record<string, string> = {}) {
         truncated: hooks.truncated ?? false,
         tree: [...files].map(([path, text]) => ({ path, type: "blob", sha: sha(text) })).concat([{ path: "content/post", type: "tree", sha: "t" }]),
       });
+    }
+    if (call.path.startsWith("/git/blobs/") && call.method === "GET") {
+      const want = call.path.slice("/git/blobs/".length);
+      const hit = [...files.values()].find((text) => sha(text) === want);
+      return hit === undefined ? json({ message: "Not Found" }, 404) : new Response(hit, { status: 200 });
     }
     return json({ message: "unexpected" }, 500);
   };

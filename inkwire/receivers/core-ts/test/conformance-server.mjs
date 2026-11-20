@@ -12,6 +12,9 @@ import {
   handleGet,
   handleList,
   handleMedia,
+  handleMediaList,
+  handleMediaUpdate,
+  handleTerms,
   handlePatch,
   handleUpsert,
   parseApiKeys,
@@ -30,7 +33,6 @@ export function createInkwireServer({ root = mkdtempSync(path.join(tmpdir(), "in
     site: { name: "Conformance", url: "https://conformance.test" },
     kinds: ["post", "page"],
     limits: { markdown_bytes: 100_000, media_bytes: 1_000_000 },
-    features: ["upsert", "list", "get", "update", "delete", "media"],
     async fetchMedia(url) {
       if (url === "https://example.test/imgs/ok.png") return { bytes: PNG, contentType: "image/png", filename: "ok.png" };
       throw new Error("no network in tests");
@@ -47,15 +49,19 @@ export function createInkwireServer({ root = mkdtempSync(path.join(tmpdir(), "in
     const common = { authHeader, keys };
     let out;
     const m = /^\/api\/content\/([^/]+)$/.exec(url.pathname);
+    const mm = /^\/api\/media\/([^/]+)$/.exec(url.pathname);
     const id = m ? decodeURIComponent(m[1]) : null;
     const text = rawBody.toString("utf8");
-    if (url.pathname === "/api/inkwire" && req.method === "GET") out = await handleDiscovery({ ...common, config });
+    if (url.pathname === "/api/inkwire" && req.method === "GET") out = await handleDiscovery({ ...common, config, store });
     else if (url.pathname === "/api/content" && req.method === "POST") out = await handleUpsert({ ...common, rawBody: text, store, config });
     else if (url.pathname === "/api/content" && req.method === "GET") out = await handleList({ ...common, query: url.searchParams, store, config });
     else if (id && req.method === "GET") out = await handleGet({ ...common, id, store });
     else if (id && req.method === "PATCH")
       out = await handlePatch({ ...common, id, rawBody: text, ifMatchHeader: req.headers["if-match"], store, config });
     else if (id && req.method === "DELETE") out = await handleDelete({ ...common, id, ifMatchHeader: req.headers["if-match"], store });
+    else if (url.pathname === "/api/terms" && req.method === "GET") out = await handleTerms({ ...common, query: url.searchParams, store });
+    else if (url.pathname === "/api/media" && req.method === "GET") out = await handleMediaList({ ...common, query: url.searchParams, store });
+    else if (mm && req.method === "PATCH") out = await handleMediaUpdate({ ...common, id: decodeURIComponent(mm[1]), rawBody: text, store });
     else if (url.pathname === "/api/media" && req.method === "POST")
       out = await handleMedia({ ...common, contentType: req.headers["content-type"], rawBody, config, store });
     else

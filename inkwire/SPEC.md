@@ -222,7 +222,7 @@ a case-insensitive substring of the name, `limit` defaults to 100, at most 500) 
 { "items": [ { "kind": "tag", "name": "SEO", "slug": "seo", "count": 12 } ] }
 ```
 
-Most used first, then by name. Names that differ only in case are one term (the most used
+Most used first, then by name (compared case-insensitively). Names that differ only in case are one term (the most used
 spelling is reported). `count` is the number of entries carrying it, drafts included.
 
 ### Media: `POST /api/media`  (feature `media`)
