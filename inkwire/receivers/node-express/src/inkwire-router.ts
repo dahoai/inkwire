@@ -2,7 +2,6 @@
 //   import { createInkwireRouter } from "./inkwire-router.js";
 //   app.use(createInkwireRouter());
 // Configuration is environment variables only; see the README. Express 4 or 5.
-import path from "node:path";
 import express from "express";
 import {
   handleDelete,
@@ -19,6 +18,7 @@ import dns from "node:dns";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
+import path from "node:path";
 import {
   FileStore,
   GitHubStore,

@@ -10,7 +10,8 @@
   "scripts": {
     "dev": "next dev -p 4001",
     "build": "next build",
-    "start": "next start -p 4001"
+    "start": "next start -p 4001",
+    "conformance": "next build && node test/run-conformance.mjs"
   },
   "devDependencies": {
     "@types/node": "20.17.6",
