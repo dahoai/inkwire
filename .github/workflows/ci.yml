@@ -1,0 +1,124 @@
+name: ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  schema:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+        working-directory: inkwire/schema
+      - run: npm test
+        working-directory: inkwire/schema
+
+  core-ts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+        working-directory: inkwire/receivers/core-ts
+      - run: npx tsc --noEmit -p .
+        working-directory: inkwire/receivers/core-ts
+      - run: npm test
+        working-directory: inkwire/receivers/core-ts
+      - run: npm run conformance
+        working-directory: inkwire/receivers/core-ts
+
+  express:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci && npm run build
+        working-directory: inkwire/receivers/core-ts
+      - run: npm ci
+        working-directory: inkwire/receivers/node-express
+      - run: npm test
+        working-directory: inkwire/receivers/node-express
+      - run: npm run conformance
+        working-directory: inkwire/receivers/node-express
+
+  nextjs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci && npm run build
+        working-directory: inkwire/receivers/core-ts
+      - run: npm ci
+        working-directory: inkwire/receivers/node-express
+      - run: npm ci
+        working-directory: inkwire/receivers/nextjs
+      - run: npm run conformance
+        working-directory: inkwire/receivers/nextjs
+
+  fastapi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e "inkwire/receivers/python-fastapi[dev]" -e "inkwire/clients/python[dev]"
+      - run: python -m pytest -q
+        working-directory: inkwire/receivers/python-fastapi
+      - run: python -m pytest -q
+        working-directory: inkwire/clients/python
+      - name: conformance (file store, then memory store)
+        working-directory: inkwire/receivers/python-fastapi
+        run: |
+          for store in file memory; do
+            INKWIRE_CONFORMANCE_STORE=$store uvicorn tests.conformance_server:app --port 4010 &
+            pid=$!
+            for i in $(seq 1 30); do curl -sf -o /dev/null localhost:4010/api/inkwire -H "Authorization: Bearer dev-key" && break; sleep 1; done
+            node ../../conformance/cli.mjs http://localhost:4010 --key dev-key --readonly-key audit-key
+            code=$?
+            kill $pid
+            [ $code -eq 0 ] || exit $code
+          done
+
+  clients-node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+        working-directory: inkwire/clients/node
+      - run: npx tsc --noEmit
+        working-directory: inkwire/clients/node
+      - run: npm test
+        working-directory: inkwire/clients/node
+
+  create-inkwire:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci && npm run build
+        working-directory: inkwire/receivers/core-ts
+      - run: npm ci
+        working-directory: inkwire/receivers/node-express
+      - run: npm ci
+        working-directory: inkwire/receivers/nextjs
+      - run: npm ci
+        working-directory: packages/create-inkwire
+      - run: npm test
+        working-directory: packages/create-inkwire
+      - run: npm run e2e
+        working-directory: packages/create-inkwire

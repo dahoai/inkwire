@@ -1,1 +1,12 @@
-{ "name": "@inkwire/conformance", "private": true, "type": "module" }
+{
+  "name": "inkwire-conformance",
+  "version": "1.0.0",
+  "description": "Black-box conformance suite for Inkwire v1 receivers: run it against any site to prove it speaks the protocol.",
+  "type": "module",
+  "bin": { "inkwire-conformance": "cli.mjs" },
+  "files": ["cli.mjs", "runner.mjs", "seo-runner.mjs", "cases.json", "README.md"],
+  "keywords": ["inkwire", "conformance", "cms", "agents"],
+  "license": "MIT",
+  "engines": { "node": ">=18" },
+  "repository": { "type": "git", "url": "git+https://github.com/dahoai/inkwire.git", "directory": "inkwire/conformance" }
+}
