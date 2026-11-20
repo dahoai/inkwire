@@ -1,6 +1,6 @@
 # inkwire-client
 
-Python client for [Inkwire](https://github.com/etugrand/inkwire) receivers: publish, read, edit,
+Python client for [Inkwire](https://github.com/dahoai/inkwire) receivers: publish, read, edit,
 delete, list terms and manage the media library. Every call retries `429` and `5xx` with backoff
 and raises `InkwireClientError(code, message, http_status)` on failure.
 
@@ -48,5 +48,5 @@ update_media(base_url, key, media_id, title=None)            # clears title, kee
 `edits(markdown, [{"find": ..., "replace": ...}])` applies exact-match text edits (each `find`
 must match exactly once) to the markdown you then send with `update`.
 
-See the [protocol spec](https://github.com/etugrand/inkwire/blob/master/inkwire/SPEC.md) for the
+See the [protocol spec](https://github.com/dahoai/inkwire/blob/master/inkwire/SPEC.md) for the
 full payload shapes.

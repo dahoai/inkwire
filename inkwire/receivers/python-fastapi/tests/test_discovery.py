@@ -20,6 +20,7 @@ from tests.conftest import KEYS, Api, bearer, make_config
 
 ALWAYS = ["upsert", "list", "get", "update", "delete", "terms"]
 FULL = ALWAYS + ["media", "media_list", "media_update"]
+FULL_WITH_URLS = ALWAYS + ["media", "media_url", "media_list", "media_update"]
 
 
 def features(store, **config):
@@ -71,7 +72,7 @@ def test_the_config_has_no_feature_list_to_set():
 
 
 def test_every_derived_feature_is_a_known_one():
-    assert set(FULL + ["schedule"]) == set(KNOWN_FEATURES)
+    assert set(FULL + ["schedule", "media_url"]) == set(KNOWN_FEATURES)
     assert set(features(MemoryStore(), schedule=True)) <= set(KNOWN_FEATURES)
 
 
@@ -130,7 +131,7 @@ def test_the_reference_app_leaves_schedule_off_and_reads_the_site_from_the_envir
         "description": "From the environment",
         "language": "fr",
     }
-    assert body["features"] == FULL
+    assert body["features"] == FULL_WITH_URLS
     assert "schedule" not in body["features"]
 
 
@@ -138,3 +139,11 @@ def test_a_future_published_at_is_stored_and_read_back_as_sent(api, create):
     created = create(external_id="later", status="published", published_at="2099-01-01T00:00:00.000Z")
     entry = api.get(f"/api/content/{created['id']}").json()
     assert (entry["status"], entry["published_at"]) == ("published", "2099-01-01T00:00:00.000Z")
+
+
+def test_media_url_is_advertised_only_with_a_fetcher():
+    async def fetcher(url):  # never called here
+        raise AssertionError(url)
+
+    assert "media_url" not in features(MemoryStore())
+    assert "media_url" in features(MemoryStore(fetcher=fetcher))

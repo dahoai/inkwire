@@ -6,7 +6,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/etugrand/inkwire.git",
+    "url": "git+https://github.com/dahoai/inkwire.git",
     "directory": "inkwire/clients/node"
   },
   "main": "dist/index.js",

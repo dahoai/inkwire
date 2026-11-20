@@ -1,6 +1,6 @@
 # inkwire-client
 
-Node client for an [Inkwire](https://github.com/etugrand/inkwire) receiver: publish, read, edit, delete, browse tags and categories, and manage the media library. Zero dependencies (Node 18+: global `fetch`, `FormData`, `Blob`).
+Node client for an [Inkwire](https://github.com/dahoai/inkwire) receiver: publish, read, edit, delete, browse tags and categories, and manage the media library. Zero dependencies (Node 18+: global `fetch`, `FormData`, `Blob`).
 
 ```js
 import {
@@ -59,4 +59,4 @@ Options: `opts.retries` (attempts, default 3; only `429` and `5xx` are retried, 
 
 Failures throw `InkwireClientError` with `code` (the protocol's code: `invalid_payload`, `unauthorized`, `forbidden`, `not_found`, `conflict`, `stale`, `too_large`, `rate_limited`, `internal`; `edit_not_found` / `edit_ambiguous` from `edits`), `message` and `httpStatus` (`0` for `edits`).
 
-Ids (entries and media) are URL-encoded for you. Entry ids are the receiver's: keep the `id` you get back from `publish`/`list` (a kind or slug change can change it on file-backed receivers). See the [protocol spec](https://github.com/etugrand/inkwire/blob/master/inkwire/SPEC.md).
+Ids (entries and media) are URL-encoded for you. Entry ids are the receiver's: keep the `id` you get back from `publish`/`list` (a kind or slug change can change it on file-backed receivers). See the [protocol spec](https://github.com/dahoai/inkwire/blob/master/inkwire/SPEC.md).

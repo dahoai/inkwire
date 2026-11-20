@@ -1,6 +1,6 @@
 {
   "name": "create-inkwire",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Add an Inkwire receiver (an API your agent can publish, read, edit and upload media through) to an existing Next.js or Express site in one command.",
   "type": "module",
   "bin": { "create-inkwire": "bin.js" },

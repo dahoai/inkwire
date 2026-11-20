@@ -414,6 +414,11 @@ class FileStore:
         """``patch`` holds only the fields to change; a ``None`` value clears that field."""
         return await asyncio.to_thread(self._update_media_sync, id, patch)
 
+    @property
+    def fetches_media_urls(self) -> bool:
+        """True when a guarded fetcher is set: the receiver then advertises ``media_url``."""
+        return self._fetcher is not None
+
     async def fetch_media(self, key: str, url: str, alt: str | None = None) -> MediaResult:
         if self._fetcher is None:
             raise InkwireError(

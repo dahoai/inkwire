@@ -1,12 +1,12 @@
 {
   "name": "inkwire-receiver-core",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "type": "module",
   "description": "Shared TS core (validate, render, sanitize, read, edit, media, stores) for building an Inkwire receiver.",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/etugrand/inkwire.git",
+    "url": "git+https://github.com/dahoai/inkwire.git",
     "directory": "inkwire/receivers/core-ts"
   },
   "main": "dist/index.js",

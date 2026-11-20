@@ -1,9 +1,9 @@
 # inkwire-receiver-core
 
-The Python [Inkwire](https://github.com/etugrand/inkwire) receiver: a core that validates
+The Python [Inkwire](https://github.com/dahoai/inkwire) receiver: a core that validates
 requests, derives SEO metadata, renders and sanitizes Markdown, resolves slugs and talks to a
 store, plus a ready-to-run FastAPI app. It implements the whole
-[protocol specification](https://github.com/etugrand/inkwire/blob/master/inkwire/SPEC.md).
+[protocol specification](https://github.com/dahoai/inkwire/blob/master/inkwire/SPEC.md).
 
 ```bash
 pip install "inkwire-receiver-core[fastapi]" uvicorn

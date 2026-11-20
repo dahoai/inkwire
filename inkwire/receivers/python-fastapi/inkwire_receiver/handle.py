@@ -42,6 +42,7 @@ KNOWN_FEATURES = (
     "terms",
     "schedule",
     "media",
+    "media_url",
     "media_list",
     "media_update",
 )
@@ -713,6 +714,8 @@ def _features(store: ContentStore, config: InkwireConfig) -> list[str]:
     for feature, method in (("media", "media"), ("media_list", "list_media"), ("media_update", "update_media")):
         if _store_supports(store, method):
             features.append(feature)
+            if feature == "media" and getattr(store, "fetches_media_urls", False):
+                features.append("media_url")
     return features
 
 

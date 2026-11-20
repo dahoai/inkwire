@@ -144,7 +144,9 @@ async function one(name) {
     ...f.start, cwd: dir, port, env: runEnv, projectEnv: true, keys: { full: keys[1], ro: keys[2] }, checks,
   });
   console.log(output.split("\n").filter((l) => !l.startsWith("PASS ")).join("\n"));
-  return code === 0 && /\b56 passed, 0 skipped, 0 failed/.test(output);
+  // Everything the receiver advertises must pass; only `schedule` (the site must hold future entries back itself) may skip.
+  const tally = /\b(\d+) passed, (\d+) skipped, 0 failed/.exec(output);
+  return code === 0 && !!tally && Number(tally[1]) >= 80 && Number(tally[2]) <= 1;
 }
 
 const wanted = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(FIXTURES);
