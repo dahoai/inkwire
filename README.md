@@ -3,6 +3,7 @@
 [![create-inkwire](https://img.shields.io/npm/v/create-inkwire.svg?label=create-inkwire)](https://www.npmjs.com/package/create-inkwire)
 [![receiver core](https://img.shields.io/npm/v/inkwire-receiver-core.svg?label=inkwire-receiver-core)](https://www.npmjs.com/package/inkwire-receiver-core)
 [![conformance](https://img.shields.io/npm/v/inkwire-conformance.svg?label=inkwire-conformance)](https://www.npmjs.com/package/inkwire-conformance)
+[![inkwire-mcp](https://img.shields.io/npm/v/inkwire-mcp.svg?label=inkwire-mcp)](https://www.npmjs.com/package/inkwire-mcp)
 [![client npm](https://img.shields.io/npm/v/inkwire-client.svg?label=inkwire-client)](https://www.npmjs.com/package/inkwire-client)
 [![client PyPI](https://img.shields.io/pypi/v/inkwire-client.svg?label=inkwire-client%20(PyPI))](https://pypi.org/project/inkwire-client/)
 [![receiver PyPI](https://img.shields.io/pypi/v/inkwire-receiver-core.svg?label=inkwire-receiver-core%20(PyPI))](https://pypi.org/project/inkwire-receiver-core/)
@@ -27,6 +28,14 @@ cd my-site            # Next.js (App Router) or Express; FastAPI prints manual s
 npx create-inkwire    # writes the routes, adds the dependency, generates two keys (full + read-only), prints them once
 ```
 
+## Then edit it from Claude Code, Cursor or any MCP agent
+
+```bash
+claude mcp add my-site --env INKWIRE_KEY=<key> -- npx -y inkwire-mcp https://my-site.com
+```
+
+Now ask in plain words: *"Our plans now start at $12: update the pricing page and its meta description. Show me the change first."* The agent finds the page, shows you the before and after of each change, and writes only after you say yes. [`inkwire-mcp`](packages/inkwire-mcp/README.md) reads the site's discovery and offers only the tools that site supports; any MCP client works (Claude Desktop, Cursor, ...).
+
 **[INSTALL.md](INSTALL.md)** is the full walk-through for people and agents: per-framework notes (Next.js, Express, Astro, FastAPI), SEO page snippets that pass the rendering gate, the Vercel/GitHub-store setup, every environment variable, and how to verify. Already have a database? [Backing it with a database](inkwire/receivers/core-ts/README.md#backing-it-with-a-database) shows the store you write. [`llms.txt`](llms.txt) is the same map for an agent that just landed in this repo.
 
 ```
@@ -50,6 +59,7 @@ INSTALL.md                       how to add Inkwire to a site (human + agent)
 llms.txt                         the repo map for an agent that just landed here
 packages/
   create-inkwire/                `npx create-inkwire`: detects the framework, writes the receiver, makes the keys
+  inkwire-mcp/                   `npx inkwire-mcp <site>`: an MCP server, so Claude, Cursor or any agent edits the site
 inkwire/
   SPEC.md                        protocol spec (source of truth alongside the schema)
   schema/                        JSON Schema + validation examples/tests
@@ -146,7 +156,7 @@ update(site, "dev-key", entry["id"], {"title": "Hello, world"}, if_match=etag)
 
 ## Status
 
-Inkwire is v1 (`Inkwire-Version: 1`): a frozen schema, a feature-gated conformance suite (`inkwire-conformance`), reference receivers (Express, Next.js, FastAPI) sharing one contract, a one-command installer (`create-inkwire`), and Node and Python clients. The badges above show each package's current version.
+Inkwire is v1 (`Inkwire-Version: 1`): a frozen schema, a feature-gated conformance suite (`inkwire-conformance`), reference receivers (Express, Next.js, FastAPI) sharing one contract, a one-command installer (`create-inkwire`), an MCP server for agents (`inkwire-mcp`), and Node and Python clients. The badges above show each package's current version.
 
 In production:
 

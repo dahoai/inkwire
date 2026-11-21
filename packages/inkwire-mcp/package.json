@@ -1,0 +1,22 @@
+{
+  "name": "inkwire-mcp",
+  "version": "1.0.0",
+  "description": "Let Claude, Cursor or any MCP agent read and edit any Inkwire site: posts, pages, SEO and images, with a before-and-after preview of every change.",
+  "type": "module",
+  "bin": { "inkwire-mcp": "bin.js" },
+  "main": "server.js",
+  "exports": { ".": "./server.js" },
+  "files": ["bin.js", "server.js", "README.md", "LICENSE"],
+  "keywords": ["inkwire", "mcp", "model-context-protocol", "cms", "agents", "claude", "cursor", "seo", "markdown"],
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "repository": { "type": "git", "url": "git+https://github.com/dahoai/inkwire.git", "directory": "packages/inkwire-mcp" },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "inkwire-client": "^1.0.1",
+    "zod": "^4.6.7"
+  }
+}

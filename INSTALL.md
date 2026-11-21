@@ -252,7 +252,15 @@ Both write test entries (`external_id`s that start with `r` and a timestamp, or 
 
 ## 5. Connect your agent
 
-In Anaella, add an Inkwire site with the site address and the **full key**. Give audit-only tools the read-only key. Environment variables are the whole configuration:
+From Claude Code (or any MCP client, see [inkwire-mcp](packages/inkwire-mcp/README.md)):
+
+```bash
+claude mcp add my-site --env INKWIRE_KEY=<full key> -- npx -y inkwire-mcp https://www.example.com
+```
+
+In Anaella, add an Inkwire site with the site address and the **full key**. Give audit-only tools the read-only key.
+
+Environment variables are the whole configuration:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |

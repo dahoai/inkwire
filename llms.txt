@@ -8,6 +8,7 @@ You are probably here to add Inkwire to a site, or to change the protocol or a r
 
 - [INSTALL.md](INSTALL.md): the whole procedure for a human or an agent. Run `npx create-inkwire --yes` in the site's project root (Next.js App Router or Express; FastAPI prints manual steps), then make the site render published entries (SEO page snippets for Next.js and Express, notes for Astro and FastAPI), then verify. Keys are shown once; never commit them.
 - [packages/create-inkwire](packages/create-inkwire/README.md): what the generator writes and its flags.
+- [packages/inkwire-mcp](packages/inkwire-mcp/README.md): `npx inkwire-mcp <site>` (key in `INKWIRE_KEY`) is an MCP server over one site, so an agent can edit it; tools follow the site's discovery.
 - Read-only filesystem hosts (Vercel, Netlify) must use the GitHub store; INSTALL.md section "Deploying" has the exact env block.
 
 ## The contract
