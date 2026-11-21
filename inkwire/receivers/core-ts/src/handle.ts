@@ -107,10 +107,14 @@ function validate<T>(schema: { safeParse(v: unknown): { success: true; data: T }
 const bytesOf = (s: string) => Buffer.byteLength(s, "utf8");
 const quote = (etag: string) => `"${etag}"`;
 
+/** Suffixes a compressing proxy adds to an ETag it passes on (Caddy, Apache: `"abc-gzip"`). */
+const ENCODING_SUFFIXES = new Set(["gzip", "br", "zstd", "deflate"]);
+
+/** Exact match, or the ETag as a proxy rewrote it: weak (`W/`, nginx, Cloudflare) or with an encoding suffix. */
 function matchesIfMatch(header: string | null | undefined, etag: string): boolean {
   if (header === null || header === undefined) return true;
   const tokens = header.split(",").map((t) => t.trim().replace(/^W\//, "").replace(/^"(.*)"$/, "$1"));
-  return tokens.includes("*") || tokens.includes(etag);
+  return tokens.some((t) => t === "*" || t === etag || (t.startsWith(`${etag}-`) && ENCODING_SUFFIXES.has(t.slice(etag.length + 1))));
 }
 
 function checkIfMatch(header: string | null | undefined, entry: StoredContent) {
@@ -239,6 +243,7 @@ async function warningsFor(
     siteUrl: config.site.url,
     others,
     ...(hasRedirects(store) ? { redirects: async (kind: string, slug: string) => Boolean(await store.findRedirect!(scope, kind, slug)) } : {}),
+    ...(store.pageExists ? { pageExists: (path: string) => store.pageExists!(scope, path) } : {}),
   });
 }
 

@@ -1,6 +1,6 @@
 [project]
 name = "inkwire-receiver-core"
-version = "1.2.0"
+version = "1.2.1"
 description = "The Inkwire receiver for Python: core, stores and a FastAPI app."
 readme = "README.md"
 license = "MIT"

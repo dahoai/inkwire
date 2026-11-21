@@ -75,6 +75,16 @@ describe("warnings", () => {
     assert.match(w[1].message, /\/post\/old-name/);
   });
 
+  test("links to pages the site serves outside the store are fine when the store says so (pageExists)", async () => {
+    const store = site();
+    const e = env(Object.assign(store, { pageExists: async (_key: string, p: string) => p === "/post/hand-written" }));
+    await e.upsert(entry(1, { slug: "live" }));
+    const md = "[file](/post/hand-written) [gone](/post/no-such-post)";
+    const w = b(await e.upsert(entry(2, { markdown: md }))).warnings;
+    assert.deepEqual(w.map((x: { code: string }) => x.code), ["link_broken"]);
+    assert.doesNotMatch(w[0].message, /hand-written/);
+  });
+
   test("dry run: same validation and answer, nothing written, read-only keys allowed", async () => {
     const e = env(site());
     const created = await e.upsert(entry(1, { title: "Same" }), RO, "dry_run=true");

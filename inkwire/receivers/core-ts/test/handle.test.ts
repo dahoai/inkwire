@@ -299,6 +299,15 @@ describe("patch", () => {
     assert.equal((await e.patch(id, { title: "c" }, "*")).status, 200);
     assert.equal((await e.patch(id, { title: "d" }, '"other"')).status, 412);
   });
+  test("If-Match as a compressing proxy rewrote the ETag (Caddy, Apache, then Cloudflare)", async () => {
+    const { e, id, etag } = await one();
+    const bare = etag.slice(1, -1);
+    assert.equal((await e.patch(id, { title: "a" }, `W/"${bare}-gzip"`)).status, 200);
+    const next = (await e.get(id)).headers.ETag!.slice(1, -1);
+    assert.equal((await e.patch(id, { title: "b" }, `"${next}-tar"`)).status, 412, "only encoding suffixes");
+    assert.equal((await e.patch(id, { title: "b" }, `"${bare}-br"`)).status, 412, "an old ETag stays stale");
+    assert.equal((await e.patch(id, { title: "b" }, `"${next}-br"`)).status, 200);
+  });
   test("no If-Match is allowed", async () => {
     const { e, id } = await one();
     assert.equal((await e.patch(id, { excerpt: "new" })).status, 200);

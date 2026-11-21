@@ -54,6 +54,18 @@ def test_links_to_missing_drafts_and_moved_pages(site):
     assert "/blog/nothing-here" in broken and "/blog/draft-page (a draft)" in broken
 
 
+def test_links_to_pages_outside_the_store_are_fine_when_it_says_so():
+    class WithFiles(MemoryStore):
+        async def page_exists(self, key, path):
+            return path == "/blog/hand-written"
+
+    api = Api(create_app(store=WithFiles(), api_keys=KEYS, config=make_config(limits=None)))
+    post(api, slug="live", excerpt="l")
+    check = post(api, "?dry_run=true", slug="linker", excerpt="k", markdown="## L\n\n[file](/blog/hand-written) [gone](/blog/no-such-post)")
+    assert codes(check) == ["link_broken"]
+    assert "hand-written" not in check.json()["warnings"][0]["message"]
+
+
 def test_patch_dry_run_previews_without_writing_or_etag(site):
     api, _ = site
     created = post(api, slug="p", excerpt="e").json()

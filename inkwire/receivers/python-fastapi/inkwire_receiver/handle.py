@@ -283,10 +283,15 @@ def _etag_matches(if_match: str | None, entry: StoredContent) -> bool:
 
     current = normalize(entry_etag(entry))
     for candidate in if_match.split(","):
-        token = candidate.strip()
-        if token == "*" or normalize(token) == current:
+        token = normalize(candidate)
+        # A compressing proxy may pass the ETag on weak (W/, stripped above) or with an encoding suffix (Caddy, Apache).
+        base, _, suffix = token.rpartition("-")
+        if token in ("*", current) or (base == current and suffix in _ENCODING_SUFFIXES):
             return True
     return False
+
+
+_ENCODING_SUFFIXES = frozenset({"gzip", "br", "zstd", "deflate"})
 
 
 async def _find_one(store: ContentStore, key: str, **filters) -> StoredContent | None:
@@ -438,9 +443,14 @@ async def _warnings(store: ContentStore, key: str, config: InkwireConfig | None,
         async def redirects(kind: str, slug: str) -> bool:
             return bool(await store.find_redirect(key, kind, slug))  # type: ignore[attr-defined]
 
+    page_exists = None
+    if hasattr(store, "page_exists"):
+        async def page_exists(path: str) -> bool:
+            return bool(await store.page_exists(key, path))  # type: ignore[attr-defined]
+
     site_url = config.site.url if config and config.site else None
     others = await _site_entries(store, key, config, except_id)
-    return await seo_warnings(entry, site_url=site_url, others=others, redirects=redirects)
+    return await seo_warnings(entry, site_url=site_url, others=others, redirects=redirects, page_exists=page_exists)
 
 
 def _place(entry: StoredContent, before: StoredContent | None, config: InkwireConfig | None) -> str:

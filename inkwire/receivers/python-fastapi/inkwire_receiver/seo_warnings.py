@@ -25,6 +25,7 @@ _IMG = re.compile(r"<img\b[^>]*>")
 _LINK = re.compile(r'<a\b[^>]*\shref="([^"]*)"[^>]*>([\s\S]*?)</a>')
 
 Redirects = Callable[[str, str], Awaitable[bool]]
+PageExists = Callable[[str], Awaitable[bool]]
 
 
 def _norm(text: str) -> str:
@@ -59,7 +60,12 @@ def _address_patterns(entries: Sequence[Mapping], site: str) -> dict[str, tuple[
 
 
 async def seo_warnings(
-    entry: Mapping, *, site_url: str | None, others: Sequence[Mapping], redirects: Redirects | None = None
+    entry: Mapping,
+    *,
+    site_url: str | None,
+    others: Sequence[Mapping],
+    redirects: Redirects | None = None,
+    page_exists: PageExists | None = None,
 ) -> list[dict]:
     """``others`` is every other entry of the site, drafts included, each with its public ``url``."""
     out: list[dict] = []
@@ -146,7 +152,7 @@ async def seo_warnings(
                 continue
             if redirects is not None and await redirects(kind, slug):
                 _once(redirected, parts.path)
-            else:
+            elif page_exists is None or not await page_exists(path):
                 _once(broken, parts.path)
             break
     if broken:

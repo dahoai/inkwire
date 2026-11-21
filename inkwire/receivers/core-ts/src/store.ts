@@ -170,6 +170,13 @@ export interface ContentStore {
   findRedirect?(key: string, kind: string, slug: string): Promise<StoredRedirect | null>;
   /** The entry's id changed: redirects to `fromId` now lead to `toId`. */
   moveRedirects?(key: string, fromId: string, toId: string): Promise<void>;
+  /**
+   * A site that also serves pages this store does not hold at the same addresses (Markdown files,
+   * static routes): true when `path` (like `/blog/a-post`) is one of them, so the `warnings` link
+   * check does not call it broken. Without it, a path shaped like an entry's address that matches no
+   * entry is broken.
+   */
+  pageExists?(key: string, path: string): Promise<boolean>;
   /** True when the store keeps `lang` and `translation_key` and filters `list` by them (feature `translations`). */
   readonly translations?: boolean;
 }

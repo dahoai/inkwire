@@ -51,6 +51,19 @@ def test_patch_if_match_accepts_weak_and_quoted_forms(api, create):
     assert api.patch(f"/api/content/{created['id']}", json={"excerpt": "any"}, headers={"if-match": "*"}).status_code == 200
 
 
+def test_patch_if_match_as_a_compressing_proxy_rewrote_it(api, create):
+    created = create(external_id="p-4b", title="Proxied", markdown="x")
+    url = f"/api/content/{created['id']}"
+    _, etag = read(api, created["id"])
+    bare = etag.strip('"')
+    assert api.patch(url, json={"excerpt": "a"}, headers={"if-match": f'W/"{bare}-gzip"'}).status_code == 200  # Caddy, then Cloudflare
+    _, now = read(api, created["id"])
+    now = now.strip('"')
+    assert api.patch(url, json={"excerpt": "b"}, headers={"if-match": f'"{now}-tar"'}).status_code == 412  # only encodings
+    assert api.patch(url, json={"excerpt": "b"}, headers={"if-match": f'"{bare}-br"'}).status_code == 412  # an old one stays stale
+    assert api.patch(url, json={"excerpt": "b"}, headers={"if-match": f'"{now}-br"'}).status_code == 200
+
+
 def test_patch_seo_merges_per_key(api, create):
     created = create(
         external_id="p-5", title="SEO", markdown="x", seo={"title": "Search title", "description": "Search description"}

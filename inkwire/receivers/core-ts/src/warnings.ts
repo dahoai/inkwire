@@ -29,6 +29,8 @@ export interface WarningContext {
   others: StoredContent[];
   /** Whether an old address of an entry redirects (feature `redirects`). */
   redirects?: (kind: string, slug: string) => Promise<boolean>;
+  /** Whether the site serves a page at `path` that is not one of its entries (`ContentStore.pageExists`). */
+  pageExists?: (path: string) => Promise<boolean>;
 }
 
 const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
@@ -130,7 +132,7 @@ export async function seoWarnings(entry: Entry, ctx: WarningContext): Promise<Wa
       const slug = p.slice(before.length, p.length - after.length);
       if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || (kind === entry.kind && slug === entry.slug)) continue;
       if (ctx.redirects && (await ctx.redirects(kind, slug))) redirected.add(u.pathname);
-      else broken.add(u.pathname);
+      else if (!(ctx.pageExists && (await ctx.pageExists(p)))) broken.add(u.pathname);
       break;
     }
   }

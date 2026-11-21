@@ -67,6 +67,7 @@ interface ContentStore {
   findRedirect?(key, kind, slug): Promise<StoredRedirect | null>;
   moveRedirects?(key, fromId, toId): Promise<void>;                      // redirects to fromId now lead to toId
   readonly translations?: boolean;                                        // keeps lang + translation_key, filters list by them
+  pageExists?(key, path): Promise<boolean>;                               // a page the site serves that the store does not hold (a Markdown file): links to it are not "broken"
 }
 ```
 

@@ -221,6 +221,10 @@ target kind; slug rules then apply in the target kind. A new `slug` follows the 
 Send `If-Match: <etag>` from the read the edit is based on. If the entry changed since, the
 answer is `412 stale` and nothing is written, so two editors never overwrite each other.
 Receivers that advertise `update` MUST honour `If-Match` when it is sent.
+A compressing proxy in front of the receiver often rewrites the `ETag` it passes on: weak
+(`W/"abc"`, nginx, Cloudflare) or with the encoding appended (`"abc-gzip"`, Caddy, Apache).
+Receivers SHOULD treat those forms of the current ETag as matching (`-gzip`, `-br`, `-zstd`,
+`-deflate`), or every edit behind such a proxy is refused as stale.
 
 Text edits are computed by the client: fetch the entry, replace the exact passage in `markdown`
 (the SDKs have an `edits` helper that requires each `find` to match exactly once), `PATCH` the

@@ -16,6 +16,9 @@ Redirects (``save_redirect``, ``find_redirect``, ``move_redirects``, all three) 
 ``redirects``: the handlers save one whenever a write changes an entry's kind or slug. A store
 that keeps ``lang`` and ``translation_key`` and filters ``list`` by them sets
 ``translations = True`` (feature ``translations``); without it those fields are refused.
+A site that also serves pages the store does not hold at the same addresses (Markdown files,
+static routes) adds ``page_exists(key, path)``, true for those paths, so the ``warnings`` link
+check does not call them broken.
 """
 
 from __future__ import annotations
