@@ -4,7 +4,7 @@
   "description": "Black-box conformance suite for Inkwire v1 receivers: run it against any site to prove it speaks the protocol.",
   "type": "module",
   "bin": { "inkwire-conformance": "cli.mjs" },
-  "files": ["cli.mjs", "runner.mjs", "seo-runner.mjs", "cases.json", "README.md"],
+  "files": ["cli.mjs", "runner.mjs", "util.mjs", "seo-runner.mjs", "cases.json", "README.md"],
   "keywords": ["inkwire", "conformance", "cms", "agents"],
   "license": "MIT",
   "engines": { "node": ">=18" },

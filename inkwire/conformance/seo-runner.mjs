@@ -1,3 +1,5 @@
+import { cleanup, pacedFetch, track } from "./util.mjs";
+
 const BASE = process.env.BASE_URL;
 const KEY = process.env.API_KEY;
 
@@ -14,7 +16,7 @@ const canonical = `https://canonical.example.test/${id}`;
 const publishedAt = "2026-08-01T12:00:00Z";
 
 async function publish(body) {
-  const response = await fetch(`${BASE.replace(/\/$/, "")}/api/content`, {
+  const response = await pacedFetch(`${BASE.replace(/\/$/, "")}/api/content`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -25,6 +27,7 @@ async function publish(body) {
   });
   const json = await response.json();
   if (!response.ok) throw new Error(`publish returned ${response.status}: ${JSON.stringify(json)}`);
+  track(json);
   if (!json.url) throw new Error("publish response has no url");
   return json;
 }
@@ -195,12 +198,14 @@ try {
   if (problems.length) {
     for (const problem of problems) console.log(`FAIL ${problem}`);
     console.log(`\n${problems.length} SEO rendering check(s) failed`);
-    process.exit(1);
+    process.exitCode = 1;
+  } else {
+    console.log("PASS SEO Profile 1 overrides");
+    console.log("PASS SEO Profile 1 defaults");
+    console.log("\nSEO Profile 1 rendering conformance passed");
   }
-  console.log("PASS SEO Profile 1 overrides");
-  console.log("PASS SEO Profile 1 defaults");
-  console.log("\nSEO Profile 1 rendering conformance passed");
 } catch (error) {
   console.error(`FAIL ${error.message}`);
-  process.exit(1);
+  process.exitCode = 1;
 }
+await cleanup({ base: BASE.replace(/\/$/, ""), key: KEY });

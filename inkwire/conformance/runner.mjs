@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { cleanup, pacedFetch, track } from "./util.mjs";
 
 // Black-box conformance runner for Inkwire receivers.
 //
@@ -59,9 +60,10 @@ async function call(method, endpoint, opts = {}) {
     payload = JSON.stringify(resolveDeep(body));
     h["content-type"] = "application/json";
   }
-  const res = await fetch(BASE + resolve(endpoint), { method, headers: h, body: payload });
+  const res = await pacedFetch(BASE + resolve(endpoint), { method, headers: h, body: payload });
   let json = null;
   try { json = await res.json(); } catch {}
+  if (res.ok && auth === true && resolve(endpoint).startsWith("/api/content")) track(json);
   const etag = res.headers.get("etag");
   if (captureEtagAs && etag) etags[captureEtagAs] = etag;
   if (captureBodyAs) vars[captureBodyAs] = json;
@@ -136,4 +138,5 @@ for (const c of cases) {
 }
 
 console.log(`\n${passed} passed, ${skipped} skipped, ${failed} failed`);
+await cleanup({ base: BASE, key: KEY, features });
 process.exit(failed ? 1 : 0);
