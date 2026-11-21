@@ -19,7 +19,7 @@ Inkwire receiver added.
   + app/api/inkwire/route.ts
   + app/inkwire-media/[...path]/route.ts
   + content/ (entries live here as markdown files)
-  + inkwire-receiver-core in package.json (^1.0.0)
+  + inkwire-receiver-core in package.json (^1.2.0)
   + .env.local (INKWIRE_API_KEYS, INKWIRE_SITE_URL, INKWIRE_ROOT)
   + .env.local added to .gitignore
 
@@ -53,7 +53,7 @@ It never prompts, so it runs unchanged in CI.
 --dir <dir>                         the project directory (default: the current one)
 --yes                               accepted for scripts
 --no-install                        do not run the package manager
---core-spec <spec>                  inkwire-receiver-core version or path (default ^1.0.0), e.g. file:../inkwire/inkwire/receivers/core-ts
+--core-spec <spec>                  inkwire-receiver-core version or path (default ^1.2.0), e.g. file:../inkwire/inkwire/receivers/core-ts
 --force                             overwrite existing receiver files
 ```
 
