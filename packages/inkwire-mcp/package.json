@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
-    "inkwire-client": "^1.0.1",
+    "inkwire-client": "^1.1.0",
     "zod": "^4.6.7"
   }
 }
