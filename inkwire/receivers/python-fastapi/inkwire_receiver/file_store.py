@@ -60,9 +60,12 @@ FRONTMATTER_FIELDS = (
     "canonical_url",
     "seo",
     "author",
+    "lang",
+    "translation_key",
     "published_at",
     "updated_at",
 )
+LANG_RE = re.compile(r"^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*$")
 SEO_FIELDS = ("title", "description", "image_url", "noindex", "og_title", "og_description", "json_ld")
 MEDIA_ID_RE = re.compile(r"[0-9a-f]{16}")
 MEDIA_SIDECAR = ".meta.json"
@@ -147,6 +150,7 @@ _ALIASES = {
     "categories": ("categories", "category"),
     "published_at": ("published_at", "date", "pubDate"),
     "updated_at": ("updated_at", "lastmod"),
+    "translation_key": ("translation_key", "translationKey"),  # Hugo's spelling
 }
 
 
@@ -188,7 +192,7 @@ def _edit_text(previous_raw: str, before: StoredContent, after: StoredContent) -
         for name in own:
             front[name] = draft if name == "draft" else (not draft) if name == "published" else after["status"]
     for name in ("external_id", "tags", "cover_image_url", "cover_image_alt", "canonical_url", "author", "version",
-                 "excerpt", "categories", "published_at", "updated_at", "seo"):
+                 "excerpt", "categories", "published_at", "updated_at", "seo", "lang", "translation_key"):
         if changed(name):
             put(name, after.get(name))
     # kind and slug come from the path; a file that spells them out keeps them true.
@@ -201,7 +205,12 @@ def _edit_text(previous_raw: str, before: StoredContent, after: StoredContent) -
 
 
 class FileStore:
-    """Stores entries as ``<root>/<kind>/<slug>.md``; ids are ``<kind>:<slug>``."""
+    """Stores entries as ``<root>/<kind>/<slug>.md``; ids are ``<kind>:<slug>``.
+
+    Redirects live in ``<root>/.redirects.json`` (the TypeScript FileStore's format).
+    """
+
+    translations = True
 
     def __init__(
         self,
@@ -216,6 +225,7 @@ class FileStore:
         self._fetcher = fetcher
         self.max_media_bytes = max_media_bytes
         self._media_lock = threading.Lock()
+        self._redirects_lock = threading.Lock()
 
     # --- path safety ------------------------------------------------------
 
@@ -273,6 +283,8 @@ class FileStore:
             } or None
 
         content_id = f"{kind}:{slug}"
+        lang = _text(front.get("lang"))
+        translation_key = _text(front.get("translation_key")) or _text(front.get("translationKey"))
         return {
             "id": content_id,
             "key": key,
@@ -290,6 +302,8 @@ class FileStore:
             "canonical_url": _text(front.get("canonical_url")),
             "seo": seo,
             "author": author,
+            "lang": lang if lang and LANG_RE.match(lang) else None,
+            "translation_key": translation_key[:255] if translation_key else None,
             "status": status,
             "published_at": _iso(front.get("published_at")) or _iso(front.get("date")) or _iso(front.get("pubDate")) or mtime,
             "updated_at": _iso(front.get("updated_at")) or _iso(front.get("lastmod")) or mtime,
@@ -506,6 +520,45 @@ class FileStore:
 
     async def media(self, key: str, upload: MediaUpload) -> MediaResult:
         return await asyncio.to_thread(self._save_media, upload)
+
+    # --- redirects: one JSON list for the whole site (ponytail: rewritten on each change; a
+    # database store wants a table once a site has thousands of renames) ---
+
+    @property
+    def _redirects_file(self) -> Path:
+        return self.root / ".redirects.json"
+
+    def _read_redirects(self) -> list[dict]:
+        try:
+            parsed = json.loads(self._redirects_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        return [r for r in parsed if isinstance(r, dict)] if isinstance(parsed, list) else []
+
+    def _write_redirects(self, items: list[dict]) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        self._atomic_write(self._redirects_file, json.dumps(items).encode("utf-8"))
+
+    def _save_redirect_sync(self, redirect: dict) -> None:
+        with self._redirects_lock:
+            rest = [r for r in self._read_redirects() if (r.get("kind"), r.get("slug")) != (redirect["kind"], redirect["slug"])]
+            self._write_redirects([*rest, dict(redirect)])
+
+    def _move_redirects_sync(self, from_id: str, to_id: str) -> None:
+        with self._redirects_lock:
+            items = self._read_redirects()
+            if any(r.get("id") == from_id for r in items):
+                self._write_redirects([{**r, "id": to_id} if r.get("id") == from_id else r for r in items])
+
+    async def save_redirect(self, key: str, redirect: dict) -> None:
+        await asyncio.to_thread(self._save_redirect_sync, redirect)
+
+    async def find_redirect(self, key: str, kind: str, slug: str) -> dict | None:
+        items = await asyncio.to_thread(self._read_redirects)
+        return next((r for r in items if r.get("kind") == kind and r.get("slug") == slug), None)
+
+    async def move_redirects(self, key: str, from_id: str, to_id: str) -> None:
+        await asyncio.to_thread(self._move_redirects_sync, from_id, to_id)
 
     async def list_media(self, key: str, filter: MediaListFilter) -> tuple[list[MediaResult], str | None]:
         return await asyncio.to_thread(self._list_media_sync, filter)

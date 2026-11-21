@@ -19,8 +19,9 @@ from inkwire_receiver.app import create_app
 from tests.conftest import KEYS, Api, bearer, make_config
 
 ALWAYS = ["upsert", "list", "get", "update", "delete", "terms"]
-FULL = ALWAYS + ["media", "media_list", "media_update"]
-FULL_WITH_URLS = ALWAYS + ["media", "media_url", "media_list", "media_update"]
+SEO = ["warnings", "redirects", "translations"]
+FULL = ALWAYS + ["media", "media_list", "media_update"] + SEO
+FULL_WITH_URLS = ALWAYS + ["media", "media_url", "media_list", "media_update"] + SEO
 
 
 def features(store, **config):
@@ -38,17 +39,18 @@ def test_the_file_store_advertises_the_media_library(tmp_path):
 def test_schedule_is_a_config_flag_and_off_by_default():
     assert InkwireConfig().schedule is False
     assert "schedule" not in features(MemoryStore())
-    assert features(MemoryStore(), schedule=True) == ALWAYS + ["schedule", "media", "media_list", "media_update"]
+    assert features(MemoryStore(), schedule=True) == ALWAYS + ["schedule", "media", "media_list", "media_update"] + SEO
 
 
 @pytest.mark.parametrize(
     "missing, expected",
     [
         ((), FULL),
-        (("update_media",), ALWAYS + ["media", "media_list"]),
-        (("list_media",), ALWAYS + ["media", "media_update"]),
-        (("list_media", "update_media"), ALWAYS + ["media"]),
-        (("media", "list_media", "update_media"), ALWAYS),
+        (("update_media",), ALWAYS + ["media", "media_list"] + SEO),
+        (("list_media",), ALWAYS + ["media", "media_update"] + SEO),
+        (("list_media", "update_media"), ALWAYS + ["media"] + SEO),
+        (("media", "list_media", "update_media"), ALWAYS + SEO),
+        (("save_redirect",), ALWAYS + ["media", "media_list", "media_update", "warnings", "translations"]),
     ],
 )
 def test_media_features_follow_what_the_store_can_do(missing, expected):

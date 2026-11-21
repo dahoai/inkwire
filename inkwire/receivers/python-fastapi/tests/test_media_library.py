@@ -392,7 +392,8 @@ def test_a_store_without_listing_or_updating_has_no_such_endpoints():
     assert listing.status_code == 404 and error_code(listing) == "not_found"
     update = api.patch("/api/media/0123456789abcdef", json={"alt": "x"})
     assert update.status_code == 404 and error_code(update) == "not_found"
-    assert api.get("/api/inkwire").json()["features"][-1] == "media"
+    features = api.get("/api/inkwire").json()["features"]
+    assert "media" in features and "media_list" not in features and "media_update" not in features
 
 
 def test_a_store_without_media_has_no_media_endpoints_at_all():
@@ -405,7 +406,7 @@ def test_a_store_without_media_has_no_media_endpoints_at_all():
     assert api.post_media(files={"file": ("p.png", PNG, "image/png")}).status_code == 404
     assert api.get("/api/media").status_code == 404
     assert api.patch("/api/media/0123456789abcdef", json={"alt": "x"}).status_code == 404
-    assert api.get("/api/inkwire").json()["features"] == ["upsert", "list", "get", "update", "delete", "terms"]
+    assert api.get("/api/inkwire").json()["features"] == ["upsert", "list", "get", "update", "delete", "terms", "warnings", "redirects", "translations"]
 
 
 def test_the_url_variant_without_a_fetcher_is_a_400_not_a_500():

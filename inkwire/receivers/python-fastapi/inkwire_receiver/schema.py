@@ -34,6 +34,7 @@ SLUG_PATTERN = r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
 KIND_RE = re.compile(KIND_PATTERN)
 SLUG_RE = re.compile(SLUG_PATTERN)
 HTTP_URL_RE = re.compile(r"^https?://")
+LANG_PATTERN = r"^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*$"
 DATE_TIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$")
 
 _URL = TypeAdapter(AnyUrl)
@@ -152,11 +153,15 @@ class ContentInput(BaseModel):
     canonical_url: str | None = None
     seo: SeoInput | None = None
     author: Author | None = None
+    lang: str | None = Field(default=None, max_length=35, pattern=LANG_PATTERN)
+    translation_key: str | None = Field(default=None, min_length=1, max_length=255)
     status: str = Field(default="draft", pattern="^(draft|published)$")
     published_at: str | None = None
 
     @field_validator(
         "slug",
+        "lang",
+        "translation_key",
         "excerpt",
         "tags",
         "categories",
@@ -254,6 +259,8 @@ class PatchInput(BaseModel):
     canonical_url: str | None = None
     seo: PatchSeo | None = None
     author: Author | None = None
+    lang: str | None = Field(default=None, max_length=35, pattern=LANG_PATTERN)
+    translation_key: str | None = Field(default=None, min_length=1, max_length=255)
     status: str | None = Field(default=None, pattern="^(draft|published)$")
     published_at: str | None = None
 

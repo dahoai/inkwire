@@ -21,6 +21,7 @@ from .handle import (
     handle_media_list,
     handle_media_update,
     handle_patch,
+    handle_redirect,
     handle_terms,
     handle_upsert,
     public_url,
@@ -29,6 +30,8 @@ from .media import IMAGE_TYPES, sniff_image, validate_image
 from .render import ALLOWED_ATTRIBUTES, ALLOWED_TAGS, edits, render_markdown, slugify
 from .schema import Author, ContentInput, MediaPatchInput, MediaUrlInput, PatchInput, PatchSeo, SeoInput
 from .seo import effective_seo, merge_overrides
+from .seo_warnings import seo_warnings
+from .site import alternates, resolve_redirect, sitemap_entries
 from .store import (
     ContentStore,
     ListFilter,
@@ -85,9 +88,14 @@ __all__ = [
     "handle_media_list",
     "handle_media_update",
     "handle_patch",
+    "handle_redirect",
     "handle_terms",
     "handle_upsert",
     "merge_overrides",
+    "alternates",
+    "resolve_redirect",
+    "seo_warnings",
+    "sitemap_entries",
     "parse_api_keys",
     "public_url",
     "render_markdown",

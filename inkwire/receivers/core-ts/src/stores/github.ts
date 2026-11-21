@@ -3,7 +3,7 @@ import { InkwireError } from "../errors.js";
 import { KIND_RE, RESERVED_KINDS, SLUG_FILE_RE, idFor, parseEntryFile, parseId, serializeEntry, updateEntryFile } from "../files.js";
 import { matches, pageMedia, pageOf, recencyKey } from "../list.js";
 import { MEDIA_FILE_RE, MEDIA_ID_RE, META_SUFFIX, type MediaMeta, metaFor, parseMeta, patchMeta, serializeMeta, toMedia } from "../media-meta.js";
-import type { ContentStore, ListFilter, ListResult, MediaInput, MediaListFilter, MediaListResult, SaveEntry, StoredContent, StoredMedia } from "../store.js";
+import type { ContentStore, ListFilter, ListResult, MediaInput, MediaListFilter, MediaListResult, SaveEntry, StoredContent, StoredMedia, StoredRedirect } from "../store.js";
 
 export interface GitHubStoreOptions {
   owner: string;
@@ -27,6 +27,8 @@ type Draft = Omit<StoredContent, "key">;
 const CACHE_MAX = 2000;
 const CONCURRENCY = 8;
 const EPOCH = "1970-01-01T00:00:00.000Z";
+/** How long a read of `.redirects.json` is reused: a page that 404s must not cost a GitHub call each time. */
+const REDIRECTS_TTL_MS = 60_000;
 
 const b64 = (s: string | Buffer) => Buffer.from(s).toString("base64");
 const encodePath = (p: string) => p.split("/").map(encodeURIComponent).join("/");
@@ -50,6 +52,7 @@ export class GitHubStore implements ContentStore {
   private urlFor: (e: { kind: string; slug: string }) => string;
   private cache = new Map<string, Draft | null>(); // blob sha -> parsed entry
   private metaCache = new Map<string, MediaMeta>(); // blob sha of a media sidecar -> parsed
+  private redirectsCache: { at: number; sha: string | null; items: StoredRedirect[] } | null = null;
 
   constructor(opts: GitHubStoreOptions) {
     if (!opts.token) throw new Error("GitHubStore: token is required");
@@ -257,15 +260,59 @@ export class GitHubStore implements ContentStore {
     return this.deleteAt(this.pathFor(p.kind, p.slug));
   }
 
-  private async putFile(filePath: string, content: string | Buffer, message: string, sha?: string): Promise<string> {
+  private async putFile(filePath: string, content: string | Buffer, message: string, sha?: string, what = "saving media"): Promise<string> {
     const res = await this.gh("PUT", `/contents/${encodePath(filePath)}`, {
       message,
       content: b64(content),
       branch: this.o.branch,
       ...(sha ? { sha } : {}),
     });
-    if (!res.ok) throw await this.failure(res, "saving media");
+    if (!res.ok) throw await this.failure(res, what);
     return ((await res.json()) as { content?: { sha?: string } }).content?.sha ?? "";
+  }
+
+  // Redirects: one JSON list in the repo, `<dir>/.redirects.json` (the FileStore's format). Writes
+  // carry the blob sha, so two writers cannot silently drop each other's redirect (GitHub answers 409).
+  // ponytail: reads are cached for REDIRECTS_TTL_MS, so another process's new redirect shows up within a minute.
+
+  private get redirectsPath() {
+    return `${this.prefix()}.redirects.json`;
+  }
+
+  private async readRedirects(fresh = false): Promise<{ sha: string | null; items: StoredRedirect[] }> {
+    const c = this.redirectsCache;
+    if (!fresh && c && Date.now() - c.at < REDIRECTS_TTL_MS) return c;
+    const file = await this.rawAt(this.redirectsPath);
+    let items: StoredRedirect[] = [];
+    try {
+      const parsed: unknown = file ? JSON.parse(file.raw) : [];
+      if (Array.isArray(parsed)) items = parsed as StoredRedirect[];
+    } catch {}
+    this.redirectsCache = { at: Date.now(), sha: file?.sha ?? null, items };
+    return this.redirectsCache;
+  }
+
+  private async writeRedirects(change: (items: StoredRedirect[]) => StoredRedirect[] | null, message: string) {
+    const { sha, items } = await this.readRedirects(true);
+    const next = change(items);
+    if (!next) return;
+    const newSha = await this.putFile(this.redirectsPath, JSON.stringify(next, null, 1), message, sha ?? undefined, "saving redirects");
+    this.redirectsCache = { at: Date.now(), sha: newSha, items: next };
+  }
+
+  async saveRedirect(_key: string, r: StoredRedirect) {
+    await this.writeRedirects((all) => [...all.filter((x) => x.kind !== r.kind || x.slug !== r.slug), r], `inkwire: redirect ${r.kind}/${r.slug}`);
+  }
+
+  async findRedirect(_key: string, kind: string, slug: string) {
+    return (await this.readRedirects()).items.find((r) => r.kind === kind && r.slug === slug) ?? null;
+  }
+
+  async moveRedirects(_key: string, fromId: string, toId: string) {
+    await this.writeRedirects(
+      (all) => (all.some((r) => r.id === fromId) ? all.map((r) => (r.id === fromId ? { ...r, id: toId } : r)) : null),
+      "inkwire: redirects follow a moved entry",
+    );
   }
 
   async saveMedia(_key: string, m: MediaInput): Promise<StoredMedia> {

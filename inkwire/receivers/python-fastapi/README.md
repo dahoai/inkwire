@@ -39,15 +39,19 @@ Every endpoint is under `/api`, takes `Authorization: Bearer <key>` and answers 
 | --- | --- |
 | `GET /api/inkwire` | discovery: site, features, kinds, limits |
 | `POST /api/content` | create or update an entry, upserting on `external_id` and `kind` |
-| `GET /api/content`, `GET /api/content/{id}` | list (`status`, `kind`, `tag`, `category`, `search`, `external_id`, `slug`, `limit`, `cursor`) and read, newest first |
+| `GET /api/content`, `GET /api/content/{id}` | list (`status`, `kind`, `tag`, `category`, `search`, `external_id`, `slug`, `lang`, `translation_key`, `limit`, `cursor`) and read, newest first |
 | `PATCH /api/content/{id}` | edit part of an entry; honours `If-Match` |
+| `?dry_run=true` on `POST` / `PATCH` | validate and return the result with its SEO `warnings`, writing nothing |
+| `GET /api/redirects?kind=&slug=` | where an entry's old address leads now |
 | `DELETE /api/content/{id}` | remove an entry |
 | `GET /api/terms` | the tags and categories entries use (`kind`, `search`, `limit`) |
 | `POST /api/media` | upload an image (multipart) or have the receiver fetch a public URL |
 | `GET /api/media` | the media library, newest first (`search`, `limit`, `cursor`) |
 | `PATCH /api/media/{id}` | set or clear (`null`) a media item's `alt` and `title` |
 
-The advertised features follow what the store can do: `terms` is always there, `media`,
+The advertised features follow what the store can do: `terms` and `warnings` are always there,
+`redirects` appears with `save_redirect` / `find_redirect` / `move_redirects`, `translations` with a
+store that sets `translations = True`, `media`,
 `media_list` and `media_update` appear when the store saves, lists and updates media, and
 `schedule` only when `InkwireConfig(schedule=True)` says the site holds a future-dated entry
 back until its time. The file store has no renderer, so the reference app does not.
@@ -75,8 +79,10 @@ app = create_app(
 
 Each endpoint is also one function (`handle_upsert`, `handle_list`, `handle_get`,
 `handle_patch`, `handle_delete`, `handle_terms`, `handle_media`, `handle_media_list`,
-`handle_media_update`, `handle_discovery`) returning `(status, headers, body)`, to mount in
-any framework.
+`handle_media_update`, `handle_redirect`, `handle_discovery`) returning `(status, headers, body)`,
+to mount in any framework. For the site's own pages: `resolve_redirect` (an old address → the
+entry to send a 308 to), `alternates` (the `hreflang` links of an entry's language versions) and
+`sitemap_entries` (public, indexable, self-canonical entries with `lastmod`).
 
 ## Stores
 
@@ -95,8 +101,12 @@ calls with exact filters.
 
 Media is optional, one method per feature: `media` (and `fetch_media` for `{url}` uploads)
 saves a file, `list_media` lists the library (`paginate_media`), `update_media` changes
-`alt` / `title`. A store without a method makes the receiver omit that feature.
+`alt` / `title`. A store without a method makes the receiver omit that feature. Redirects are
+three methods (`save_redirect`, `find_redirect`, `move_redirects`; the handlers save one when a
+write changes an entry's kind or slug). `translations = True` promises the store keeps `lang` and
+`translation_key` and filters `list` by them.
 
 `MemoryStore` is for development and tests. `FileStore` keeps `<root>/<kind>/<slug>.md` with
 YAML frontmatter (existing files are read as they are) and `<root>/media/<id>-<name>` with a
-`.meta.json` sidecar for each upload.
+`.meta.json` sidecar for each upload, and the redirects in `<root>/.redirects.json`. Both do
+translations. Undo (`revisions`) is not in the Python receiver yet.

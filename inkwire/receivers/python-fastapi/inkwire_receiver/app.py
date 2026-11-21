@@ -41,6 +41,7 @@ from inkwire_receiver import (
     handle_media_list,
     handle_media_update,
     handle_patch,
+    handle_redirect,
     handle_terms,
     handle_upsert,
     parse_api_keys,
@@ -146,6 +147,7 @@ def create_app(
             keys=keys,
             store=store,
             config=config,
+            query=request.query_params,
         )
         return _json(status, headers, body)
 
@@ -177,6 +179,7 @@ def create_app(
             keys=keys,
             store=store,
             config=config,
+            query=request.query_params,
         )
         return _json(status, headers, body)
 
@@ -188,6 +191,13 @@ def create_app(
             if_match=request.headers.get("if-match"),
             keys=keys,
             store=store,
+        )
+        return _json(status, headers, body)
+
+    @app.get("/api/redirects")
+    async def redirects(request: Request):
+        status, headers, body = await handle_redirect(
+            auth_header=auth_header(request), query=request.query_params, keys=keys, store=store, config=config
         )
         return _json(status, headers, body)
 

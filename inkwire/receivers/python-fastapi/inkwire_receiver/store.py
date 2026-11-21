@@ -11,6 +11,11 @@ The media methods are optional and each one switches on a discovery feature:
 - ``update_media``: the store can change a file's ``alt`` / ``title`` -> ``media_update``
 
 A store that cannot do one simply omits the method and the receiver omits the feature.
+
+Redirects (``save_redirect``, ``find_redirect``, ``move_redirects``, all three) switch on
+``redirects``: the handlers save one whenever a write changes an entry's kind or slug. A store
+that keeps ``lang`` and ``translation_key`` and filters ``list`` by them sets
+``translations = True`` (feature ``translations``); without it those fields are refused.
 """
 
 from __future__ import annotations
@@ -80,6 +85,8 @@ class StoredContent(TypedDict, total=False):
     canonical_url: Optional[str]
     seo: Optional[SeoOverrides]
     author: Optional[Author]
+    lang: Optional[str]
+    translation_key: Optional[str]
     status: ContentStatus
     published_at: str
     updated_at: str
@@ -99,8 +106,19 @@ class ListFilter:
     search: str | None = None
     external_id: str | None = None
     slug: str | None = None
+    lang: str | None = None
+    translation_key: str | None = None
     limit: int = 20
     cursor: str | None = None
+
+
+class StoredRedirect(TypedDict):
+    """An old address (``kind`` + ``slug``) and the id of the entry it leads to now."""
+
+    kind: str
+    slug: str
+    id: str
+    created_at: str
 
 
 @dataclass
@@ -231,6 +249,10 @@ def matches(entry: StoredContent, filter: ListFilter) -> bool:
         return False
     if filter.slug is not None and entry.get("slug") != filter.slug:
         return False
+    if filter.lang is not None and entry.get("lang") != filter.lang:
+        return False
+    if filter.translation_key is not None and entry.get("translation_key") != filter.translation_key:
+        return False
     if filter.tag is not None and filter.tag not in (entry.get("tags") or []):
         return False
     if filter.category is not None and filter.category not in (entry.get("categories") or []):
@@ -297,10 +319,13 @@ def safe_filename(filename: str, fallback: str = "image") -> str:
 class MemoryStore:
     """In-memory store for local development and tests."""
 
+    translations = True
+
     def __init__(self, *, media_url_base: str = "https://inkwire-memory.invalid/media", fetcher=None):
         self._entries: dict[str, StoredContent] = {}
         self._media: dict[str, bytes] = {}
         self._media_meta: dict[str, MediaResult] = {}  # keyed by (key, id)
+        self._redirects: dict[str, StoredRedirect] = {}  # keyed by (key, kind, slug)
         self._media_url_base = media_url_base.rstrip("/")
         self._fetcher = fetcher
 
@@ -338,6 +363,18 @@ class MemoryStore:
 
     async def remove(self, key: str, id: str) -> bool:
         return self._entries.pop(self._k(key, id), None) is not None
+
+    async def save_redirect(self, key: str, redirect: StoredRedirect) -> None:
+        self._redirects[f"{key}\x00{redirect['kind']}\x00{redirect['slug']}"] = dict(redirect)  # type: ignore[assignment]
+
+    async def find_redirect(self, key: str, kind: str, slug: str) -> StoredRedirect | None:
+        found = self._redirects.get(f"{key}\x00{kind}\x00{slug}")
+        return dict(found) if found else None  # type: ignore[return-value]
+
+    async def move_redirects(self, key: str, from_id: str, to_id: str) -> None:
+        for stored_key, redirect in self._redirects.items():
+            if stored_key.startswith(f"{key}\x00") and redirect["id"] == from_id:
+                redirect["id"] = to_id
 
     async def media(self, key: str, upload: MediaUpload) -> MediaResult:
         hex_id = secrets.token_hex(8)

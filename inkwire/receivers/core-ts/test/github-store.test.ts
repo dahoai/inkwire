@@ -75,7 +75,10 @@ describe("GitHubStore through the handlers", () => {
     const a = b(await e.upsert(post(1, { title: "Movable" })));
     const r = await e.patch(a.id, { kind: "page" });
     assert.equal(b(r).id, "page.movable");
-    assert.deepEqual([...gh.files.keys()], ["content/page/movable.md"]);
+    assert.deepEqual([...gh.files.keys()].sort(), ["content/.redirects.json", "content/page/movable.md"]);
+    assert.deepEqual(JSON.parse(gh.files.get("content/.redirects.json")!.toString()).map((r: { kind: string; slug: string; id: string }) => [r.kind, r.slug, r.id]), [["post", "movable", "page.movable"]]);
+    const old = await e.redirect("kind=post&slug=movable");
+    assert.equal(b(old).id, "page.movable", "the old address leads to the moved entry");
   });
 
   test("delete removes the file with its sha; then get is 404", async () => {

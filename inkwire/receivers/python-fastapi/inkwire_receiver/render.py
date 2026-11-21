@@ -96,3 +96,26 @@ __all__ = [
     "render_markdown",
     "slugify",
 ]
+
+
+_IMG = re.compile(r"<img\b([^>]*?)(\s*/?)>")
+_SRC = re.compile(r'\ssrc="([^"]*)"')
+
+
+def size_images(html: str, sizes: Mapping[str, tuple[int, int]]) -> str:
+    """Adds ``width``/``height`` to each ``<img>`` whose ``src`` is a library image of known size.
+
+    Runs after sanitizing, so the allowlist stays as it is; a tag that already has a width is left alone.
+    """
+    if not sizes:
+        return html
+
+    def put(match: re.Match) -> str:
+        attrs, end = match.group(1), match.group(2)
+        if re.search(r"\swidth=", attrs):
+            return match.group(0)
+        src = _SRC.search(attrs)
+        size = sizes.get(src.group(1).replace("&amp;", "&")) if src else None
+        return f'<img{attrs} width="{size[0]}" height="{size[1]}"{end}>' if size else match.group(0)
+
+    return _IMG.sub(put, html)

@@ -16,9 +16,10 @@ from pydantic import ValidationError
 from .auth import ApiKey, authorize, require_write
 from .errors import InkwireError
 from .media import validate_image
-from .render import render_markdown, slugify
+from .render import render_markdown, size_images, slugify
 from .schema import ContentInput, MediaPatchInput, MediaUrlInput, PatchInput, validation_message
 from .seo import effective_seo, merge_overrides, overrides_from_input
+from .seo_warnings import seo_warnings
 from .store import (
     DEFAULT_LIMIT,
     MAX_LIMIT,
@@ -45,12 +46,19 @@ KNOWN_FEATURES = (
     "media_url",
     "media_list",
     "media_update",
+    "warnings",
+    "redirects",
+    "translations",
 )
 MAX_SLUG_LENGTH = 255
 TERMS_DEFAULT_LIMIT = 100
 TERMS_MAX_LIMIT = 500
 TERMS_SCAN_CAP = 10_000
 TERM_KINDS = ("tag", "category")
+# Entries read per write to check duplicates and links, and media read to size images.
+# ponytail: full scans; a store with a url lookup or an index would skip them.
+WARN_SCAN_CAP = 2_000
+SIZE_SCAN_CAP = 2_000
 
 Response = tuple[int, dict[str, str], dict]
 
@@ -231,6 +239,9 @@ def _summary(entry: StoredContent, config: InkwireConfig | None) -> dict:
     }
     if entry.get("categories") is not None:  # absent, not [], once cleared or never set
         summary["categories"] = list(entry["categories"])
+    for name in ("lang", "translation_key"):
+        if entry.get(name):
+            summary[name] = entry[name]
     return summary
 
 
@@ -292,6 +303,87 @@ def _store_supports(store: ContentStore, method: str) -> bool:
     return callable(getattr(store, method, None))
 
 
+# --- dry runs, redirects, translations, warnings ----------------------------
+
+
+def _dry_run(query: Any) -> bool:
+    raw = query.get("dry_run") if query is not None and hasattr(query, "get") else None
+    if raw is None or raw == "false":
+        return False
+    if raw in ("true", ""):
+        return True
+    raise InkwireError("invalid_payload", 'dry_run must be "true" or "false"')
+
+
+def _has_redirects(store: ContentStore) -> bool:
+    return all(_store_supports(store, m) for m in ("save_redirect", "find_redirect", "move_redirects"))
+
+
+async def _after_move(store: ContentStore, key: str, before: StoredContent, saved: StoredContent) -> None:
+    """After a save that replaced ``before``: redirects follow the id, the old address redirects."""
+    if not _has_redirects(store):
+        return
+    if before.get("id") != saved.get("id"):
+        await store.move_redirects(key, before["id"], saved["id"])  # type: ignore[attr-defined]
+    if before.get("kind") != saved.get("kind") or before.get("slug") != saved.get("slug"):
+        await store.save_redirect(  # type: ignore[attr-defined]
+            key, {"kind": before["kind"], "slug": before["slug"], "id": saved["id"], "created_at": _now()}
+        )
+
+
+def _require_translations(store: ContentStore, body: Any) -> None:
+    if not getattr(store, "translations", False) and isinstance(body, dict) and ("lang" in body or "translation_key" in body):
+        raise InkwireError("invalid_payload", "this receiver does not store translations: unknown field lang, translation_key")
+
+
+async def _render(store: ContentStore, key: str, markdown: str) -> str:
+    """Sanitized HTML, with ``width``/``height`` on images from the media library."""
+    html = render_markdown(markdown)
+    if "<img" not in html or not _store_supports(store, "list_media"):
+        return html
+    sizes: dict[str, tuple[int, int]] = {}
+    cursor: str | None = None
+    seen = 0
+    while seen < SIZE_SCAN_CAP:
+        items, cursor = await store.list_media(key, MediaListFilter(limit=MAX_LIMIT, cursor=cursor))  # type: ignore[attr-defined]
+        for item in items:
+            if item.width and item.height:
+                sizes[item.url] = (item.width, item.height)
+        seen += len(items)
+        if not cursor or not items:
+            break
+    return size_images(html, sizes)
+
+
+async def _site_entries(store: ContentStore, key: str, config: InkwireConfig | None, except_id: str | None) -> list[StoredContent]:
+    out: list[StoredContent] = []
+    cursor: str | None = None
+    while len(out) < WARN_SCAN_CAP:
+        items, cursor = await store.list(key, ListFilter(limit=MAX_LIMIT, cursor=cursor))
+        out.extend({**item, "url": public_url(item, config)} for item in items if item.get("id") != except_id)
+        if not cursor or not items:
+            break
+    return out
+
+
+async def _warnings(store: ContentStore, key: str, config: InkwireConfig | None, entry: StoredContent, except_id: str | None) -> list[dict]:
+    redirects = None
+    if _has_redirects(store):
+        async def redirects(kind: str, slug: str) -> bool:
+            return bool(await store.find_redirect(key, kind, slug))  # type: ignore[attr-defined]
+
+    site_url = config.site.url if config and config.site else None
+    others = await _site_entries(store, key, config, except_id)
+    return await seo_warnings(entry, site_url=site_url, others=others, redirects=redirects)
+
+
+def _place(entry: StoredContent, before: StoredContent | None, config: InkwireConfig | None) -> str:
+    """Where the entry will live: its own address if it stays put, else the one the config gives it."""
+    if before is not None and before.get("kind") == entry.get("kind") and before.get("slug") == entry.get("slug"):
+        return public_url(before, config)
+    return public_url({k: v for k, v in entry.items() if k != "url"}, config)  # type: ignore[arg-type]
+
+
 # --- POST /api/content ------------------------------------------------------
 
 
@@ -303,13 +395,21 @@ async def handle_upsert(
     keys: list,
     store: ContentStore,
     config: InkwireConfig | None = None,
+    query: Any = None,
 ) -> Response:
-    """Create or update one entry, upserting on ``(key, kind, external_id)``."""
+    """Create or update one entry, upserting on ``(key, kind, external_id)``.
+
+    ``?dry_run=true``: validate and answer as the write would, with its warnings, writing nothing
+    (a read-only key may ask)."""
+    dry_run = _dry_run(query)
     api_key = authorize(auth_header, keys)
-    require_write(api_key)
+    if not dry_run:
+        require_write(api_key)
     key = api_key.scope
 
-    payload = _validate(ContentInput, raw_body)
+    body = _parse_json(raw_body)
+    _require_translations(store, body)
+    payload = _validate(ContentInput, body)
     _require_kind(payload.kind, config)
     _check_markdown(payload.markdown, config)
 
@@ -334,7 +434,7 @@ async def handle_upsert(
         "title": payload.title,
         "slug": slug,
         "markdown": payload.markdown,
-        "html": render_markdown(payload.markdown),
+        "html": await _render(store, key, payload.markdown),
         "excerpt": payload.excerpt,
         "tags": payload.tags,
         "categories": payload.categories,
@@ -343,12 +443,32 @@ async def handle_upsert(
         "canonical_url": payload.canonical_url,
         "seo": overrides_from_input(payload.seo),
         "author": (payload.author.model_dump(exclude_none=True) or None) if payload.author else None,
+        "lang": payload.lang,
+        "translation_key": payload.translation_key,
         "status": payload.status,
         "published_at": payload.published_at or (existing or {}).get("published_at") or now,
         "updated_at": now,
         "version": int((existing or {}).get("version") or 0) + 1,
     }
+    url = _place(entry, existing, config)
+    warnings = await _warnings(store, key, config, {**entry, "url": url}, (existing or {}).get("id"))
+    if dry_run:
+        return _ok(
+            {
+                "id": (existing or {}).get("id"),
+                "external_id": payload.external_id,
+                "url": url,
+                "slug": slug,
+                "kind": payload.kind,
+                "status": payload.status,
+                "created": existing is None,
+                "dry_run": True,
+                "warnings": warnings,
+            }
+        )
     saved = await store.save(key, entry)
+    if existing is not None:
+        await _after_move(store, key, existing, saved)
     return _ok(
         {
             "id": saved.get("id", ""),
@@ -358,6 +478,7 @@ async def handle_upsert(
             "kind": saved.get("kind", payload.kind),
             "status": saved.get("status", payload.status),
             "created": existing is None,
+            "warnings": warnings,
         }
     )
 
@@ -378,6 +499,8 @@ async def handle_list(
     api_key = authorize(auth_header, keys)
     key = api_key.scope
 
+    if not getattr(store, "translations", False) and (_query_value(query, "lang") or _query_value(query, "translation_key")):
+        raise InkwireError("invalid_payload", "this receiver does not store translations: lang and translation_key are not filters here")
     status = _query_value(query, "status")
     if status is not None and status not in ("draft", "published"):
         raise InkwireError("invalid_payload", "status: must be 'draft' or 'published'")
@@ -390,6 +513,8 @@ async def handle_list(
         search=_query_value(query, "search"),
         external_id=_query_value(query, "external_id"),
         slug=_query_value(query, "slug"),
+        lang=_query_value(query, "lang"),
+        translation_key=_query_value(query, "translation_key"),
         limit=_query_limit(query, DEFAULT_LIMIT, MAX_LIMIT),
         cursor=_query_value(query, "cursor"),
     )
@@ -430,13 +555,20 @@ async def handle_patch(
     keys: list,
     store: ContentStore,
     config: InkwireConfig | None = None,
+    query: Any = None,
 ) -> Response:
-    """Edit part of an entry; ``If-Match`` makes concurrent edits safe (412, nothing written)."""
+    """Edit part of an entry; ``If-Match`` makes concurrent edits safe (412, nothing written).
+
+    ``?dry_run=true``: the entry as the edit would make it, with its warnings, nothing written (no ETag)."""
+    dry_run = _dry_run(query)
     api_key = authorize(auth_header, keys)
-    require_write(api_key)
+    if not dry_run:
+        require_write(api_key)
     key = api_key.scope
 
-    payload = _validate(PatchInput, raw_body)
+    body = _parse_json(raw_body)
+    _require_translations(store, body)
+    payload = _validate(PatchInput, body)
     sent = payload.model_fields_set
 
     existing = await store.get(key, str(id))
@@ -463,7 +595,7 @@ async def handle_patch(
         "kind": target_kind,
         "slug": target_slug,
         "markdown": markdown,
-        "html": render_markdown(markdown),
+        "html": await _render(store, key, markdown),
         "updated_at": now,
         "version": int(existing.get("version") or 1) + 1,
     }
@@ -475,6 +607,8 @@ async def handle_patch(
         "cover_image_url",
         "cover_image_alt",
         "canonical_url",
+        "lang",
+        "translation_key",
         "status",
     ):
         if name in sent:
@@ -487,8 +621,13 @@ async def handle_patch(
         entry["published_at"] = payload.published_at or now
 
     entry.pop("etag", None)  # the store issues the new ETag for the new bytes
+    url = _place(entry, existing, config)
+    warnings = await _warnings(store, key, config, {**entry, "url": url}, existing.get("id"))
+    if dry_run:
+        return _ok({**_full({**entry, "url": url}, config), "dry_run": True, "warnings": warnings})
     saved = await store.save(key, entry)
-    return _ok(_full(saved, config), {"ETag": entry_etag(saved)})
+    await _after_move(store, key, existing, saved)
+    return _ok({**_full(saved, config), "warnings": warnings}, {"ETag": entry_etag(saved)})
 
 
 # --- DELETE /api/content/{id} ----------------------------------------------
@@ -517,6 +656,35 @@ async def handle_delete(
     if not removed:
         raise InkwireError("not_found", f"no content with id '{id}'")
     return _ok({"id": str(id), "deleted": True})
+
+
+# --- GET /api/redirects -----------------------------------------------------
+
+
+@_handle_errors
+async def handle_redirect(
+    *,
+    auth_header: str | None,
+    query: Any,
+    keys: list,
+    store: ContentStore,
+    config: InkwireConfig | None = None,
+) -> Response:
+    """Where an old address (``kind``, ``slug``) leads now (feature ``redirects``)."""
+    api_key = authorize(auth_header, keys)
+    if not _has_redirects(store):
+        raise InkwireError("not_found", "this receiver keeps no redirects")
+    kind = _query_value(query, "kind") or "post"
+    slug = _query_value(query, "slug")
+    if not slug:
+        raise InkwireError("invalid_payload", "slug is required")
+    if await _find_one(store, api_key.scope, kind=kind, slug=slug):
+        raise InkwireError("not_found", f"an entry lives at {kind}/{slug}: nothing redirects from there")
+    redirect = await store.find_redirect(api_key.scope, kind, slug)  # type: ignore[attr-defined]
+    entry = await store.get(api_key.scope, redirect["id"]) if redirect else None
+    if entry is None:
+        raise InkwireError("not_found", f"nothing redirects from {kind}/{slug}")
+    return _ok({"kind": kind, "slug": slug, "id": entry["id"], "url": public_url(entry, config), "status": entry.get("status", "draft")})
 
 
 # --- GET /api/terms ---------------------------------------------------------
@@ -716,6 +884,11 @@ def _features(store: ContentStore, config: InkwireConfig) -> list[str]:
             features.append(feature)
             if feature == "media" and getattr(store, "fetches_media_urls", False):
                 features.append("media_url")
+    features.append("warnings")
+    if _has_redirects(store):
+        features.append("redirects")
+    if getattr(store, "translations", False):
+        features.append("translations")
     return features
 
 
@@ -770,6 +943,7 @@ __all__ = [
     "handle_media_list",
     "handle_media_update",
     "handle_patch",
+    "handle_redirect",
     "handle_terms",
     "handle_upsert",
     "public_url",
