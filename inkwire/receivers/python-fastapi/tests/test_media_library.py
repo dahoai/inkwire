@@ -406,7 +406,7 @@ def test_a_store_without_media_has_no_media_endpoints_at_all():
     assert api.post_media(files={"file": ("p.png", PNG, "image/png")}).status_code == 404
     assert api.get("/api/media").status_code == 404
     assert api.patch("/api/media/0123456789abcdef", json={"alt": "x"}).status_code == 404
-    assert api.get("/api/inkwire").json()["features"] == ["upsert", "list", "get", "update", "delete", "terms", "warnings", "redirects", "translations"]
+    assert api.get("/api/inkwire").json()["features"] == ["upsert", "list", "get", "update", "delete", "terms", "revisions", "warnings", "redirects", "translations"]
 
 
 def test_the_url_variant_without_a_fetcher_is_a_400_not_a_500():

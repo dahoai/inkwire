@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import copy
 import json
 import secrets
 import string
@@ -110,6 +111,16 @@ class ListFilter:
     translation_key: str | None = None
     limit: int = 20
     cursor: str | None = None
+
+
+class StoredRevision(TypedDict):
+    """A past version of an entry: the state a write (update, restore or delete) replaced.
+    ``entry`` is the whole entry as it was, without ``key``."""
+
+    revision: str
+    created_at: str
+    replaced_by: str  # "update" | "restore" | "delete"
+    entry: dict
 
 
 class StoredRedirect(TypedDict):
@@ -326,6 +337,7 @@ class MemoryStore:
         self._media: dict[str, bytes] = {}
         self._media_meta: dict[str, MediaResult] = {}  # keyed by (key, id)
         self._redirects: dict[str, StoredRedirect] = {}  # keyed by (key, kind, slug)
+        self._revisions: dict[str, list[StoredRevision]] = {}  # keyed by (key, id), newest first
         self._media_url_base = media_url_base.rstrip("/")
         self._fetcher = fetcher
 
@@ -363,6 +375,18 @@ class MemoryStore:
 
     async def remove(self, key: str, id: str) -> bool:
         return self._entries.pop(self._k(key, id), None) is not None
+
+    async def save_revision(self, key: str, id: str, revision: StoredRevision, keep: int) -> None:
+        k = self._k(key, id)
+        self._revisions[k] = [copy.deepcopy(revision), *self._revisions.get(k, [])][:keep]
+
+    async def list_revisions(self, key: str, id: str) -> list[StoredRevision]:
+        return copy.deepcopy(self._revisions.get(self._k(key, id), []))
+
+    async def move_revisions(self, key: str, from_id: str, to_id: str) -> None:
+        moved = self._revisions.pop(self._k(key, from_id), None)
+        if moved:
+            self._revisions[self._k(key, to_id)] = [*moved, *self._revisions.get(self._k(key, to_id), [])]
 
     async def save_redirect(self, key: str, redirect: StoredRedirect) -> None:
         self._redirects[f"{key}\x00{redirect['kind']}\x00{redirect['slug']}"] = dict(redirect)  # type: ignore[assignment]

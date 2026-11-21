@@ -7,6 +7,8 @@ protocol error shape is built here, so an adapter only has to turn the tuple int
 from __future__ import annotations
 
 import json
+import secrets
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
@@ -17,7 +19,7 @@ from .auth import ApiKey, authorize, require_write
 from .errors import InkwireError
 from .media import validate_image
 from .render import render_markdown, size_images, slugify
-from .schema import ContentInput, MediaPatchInput, MediaUrlInput, PatchInput, validation_message
+from .schema import ContentInput, MediaPatchInput, MediaUrlInput, PatchInput, RestoreInput, validation_message
 from .seo import effective_seo, merge_overrides, overrides_from_input
 from .seo_warnings import seo_warnings
 from .store import (
@@ -29,6 +31,7 @@ from .store import (
     MediaResult,
     MediaUpload,
     StoredContent,
+    StoredRevision,
     content_id,
 )
 
@@ -46,6 +49,7 @@ KNOWN_FEATURES = (
     "media_url",
     "media_list",
     "media_update",
+    "revisions",
     "warnings",
     "redirects",
     "translations",
@@ -75,6 +79,8 @@ class Site:
 class Limits:
     markdown_bytes: int | None = None
     media_bytes: int | None = None
+    #: How many past versions an entry keeps (feature ``revisions``), default 50.
+    revisions: int | None = None
 
 
 @dataclass
@@ -319,12 +325,72 @@ def _has_redirects(store: ContentStore) -> bool:
     return all(_store_supports(store, m) for m in ("save_redirect", "find_redirect", "move_redirects"))
 
 
+# Revisions: every write that replaces an entry (update, restore, delete) first keeps the version it
+# replaces, so the first edit of a page that predates Inkwire is undoable too.
+
+DEFAULT_KEEP_REVISIONS = 50
+
+
+def _has_revisions(store: ContentStore) -> bool:
+    return all(_store_supports(store, m) for m in ("save_revision", "list_revisions", "move_revisions"))
+
+
+def _keep(config: InkwireConfig | None) -> int:
+    limit = config.limits.revisions if config and config.limits and config.limits.revisions else DEFAULT_KEEP_REVISIONS
+    return max(1, int(limit))
+
+
+async def _keep_revision(store: ContentStore, key: str, entry: StoredContent, by: str, config: InkwireConfig | None) -> None:
+    if not _has_revisions(store):
+        return
+    was = {k: v for k, v in entry.items() if k != "key"}
+    revision = f"{_base36(int(time.time() * 1000))}{secrets.token_hex(4)}"
+    stored: StoredRevision = {"revision": revision, "created_at": _now(), "replaced_by": by, "entry": was}
+    await store.save_revision(key, entry["id"], stored, _keep(config))  # type: ignore[attr-defined]
+
+
+def _base36(n: int) -> str:
+    digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+    out = ""
+    while n:
+        n, r = divmod(n, 36)
+        out = digits[r] + out
+    return out or "0"
+
+
+async def _follow_move(store: ContentStore, key: str, from_id: str, to_id: str) -> None:
+    """A store whose ids follow the kind and slug moved the entry: its history and redirects go with it."""
+    if from_id == to_id:
+        return
+    if _has_revisions(store):
+        await store.move_revisions(key, from_id, to_id)  # type: ignore[attr-defined]
+    if _has_redirects(store):
+        await store.move_redirects(key, from_id, to_id)  # type: ignore[attr-defined]
+
+
+def _revision_summary(r: StoredRevision) -> dict:
+    e = r.get("entry") or {}
+    return {
+        "revision": r["revision"],
+        "created_at": r["created_at"],
+        "replaced_by": r["replaced_by"],
+        "kind": e.get("kind"),
+        "slug": e.get("slug"),
+        "title": e.get("title"),
+        "status": e.get("status"),
+    }
+
+
+def _require_revisions(store: ContentStore) -> None:
+    if not _has_revisions(store):
+        raise InkwireError("not_found", "this receiver keeps no revisions")
+
+
 async def _after_move(store: ContentStore, key: str, before: StoredContent, saved: StoredContent) -> None:
-    """After a save that replaced ``before``: redirects follow the id, the old address redirects."""
+    """After a save that replaced ``before``: history and redirects follow the id, the old address redirects."""
+    await _follow_move(store, key, before["id"], saved["id"])
     if not _has_redirects(store):
         return
-    if before.get("id") != saved.get("id"):
-        await store.move_redirects(key, before["id"], saved["id"])  # type: ignore[attr-defined]
     if before.get("kind") != saved.get("kind") or before.get("slug") != saved.get("slug"):
         await store.save_redirect(  # type: ignore[attr-defined]
             key, {"kind": before["kind"], "slug": before["slug"], "id": saved["id"], "created_at": _now()}
@@ -466,6 +532,8 @@ async def handle_upsert(
                 "warnings": warnings,
             }
         )
+    if existing is not None:
+        await _keep_revision(store, key, existing, "update", config)
     saved = await store.save(key, entry)
     if existing is not None:
         await _after_move(store, key, existing, saved)
@@ -625,6 +693,7 @@ async def handle_patch(
     warnings = await _warnings(store, key, config, {**entry, "url": url}, existing.get("id"))
     if dry_run:
         return _ok({**_full({**entry, "url": url}, config), "dry_run": True, "warnings": warnings})
+    await _keep_revision(store, key, existing, "update", config)
     saved = await store.save(key, entry)
     await _after_move(store, key, existing, saved)
     return _ok({**_full(saved, config), "warnings": warnings}, {"ETag": entry_etag(saved)})
@@ -641,8 +710,10 @@ async def handle_delete(
     if_match: str | None = None,
     keys: list,
     store: ContentStore,
+    config: InkwireConfig | None = None,
 ) -> Response:
-    """Remove the entry (it must stop being public); honours ``If-Match``."""
+    """Remove the entry (it must stop being public); honours ``If-Match``. The removed version is
+    kept first (feature ``revisions``), so a delete can be undone."""
     api_key = authorize(auth_header, keys)
     require_write(api_key)
     key = api_key.scope
@@ -652,10 +723,98 @@ async def handle_delete(
         raise InkwireError("not_found", f"no content with id '{id}'")
     if not _etag_matches(if_match, existing):
         raise InkwireError("stale", "If-Match no longer matches: the entry changed since you read it")
+    await _keep_revision(store, key, existing, "delete", config)
     removed = await store.remove(key, str(id))
     if not removed:
         raise InkwireError("not_found", f"no content with id '{id}'")
     return _ok({"id": str(id), "deleted": True})
+
+
+# --- GET /api/content/{id}/revisions[/{revision}]  (feature ``revisions``) ---
+
+
+@_handle_errors
+async def handle_revisions(*, auth_header: str | None, id: str, keys: list, store: ContentStore) -> Response:
+    """The past versions of an entry, newest first (a deleted entry's too)."""
+    api_key = authorize(auth_header, keys)
+    _require_revisions(store)
+    items = await store.list_revisions(api_key.scope, str(id))  # type: ignore[attr-defined]
+    if not items and await store.get(api_key.scope, str(id)) is None:
+        raise InkwireError("not_found", f"no content with id '{id}'")
+    return _ok({"items": [_revision_summary(r) for r in items]})
+
+
+@_handle_errors
+async def handle_revision(
+    *, auth_header: str | None, id: str, revision: str, keys: list, store: ContentStore, config: InkwireConfig | None = None
+) -> Response:
+    """One past version in full, with its effective ``seo``."""
+    api_key = authorize(auth_header, keys)
+    _require_revisions(store)
+    found = next((r for r in await store.list_revisions(api_key.scope, str(id)) if r["revision"] == revision), None)  # type: ignore[attr-defined]
+    if found is None:
+        raise InkwireError("not_found", f"no revision '{revision}' of entry '{id}'")
+    return _ok({**_revision_summary(found), "entry": _full({**found["entry"], "key": api_key.scope}, config)})
+
+
+# --- POST /api/content/{id}/restore  (feature ``revisions``) ----------------
+
+
+@_handle_errors
+async def handle_restore(
+    *,
+    auth_header: str | None,
+    id: str,
+    raw_body: Any,
+    if_match: str | None = None,
+    keys: list,
+    store: ContentStore,
+    config: InkwireConfig | None = None,
+) -> Response:
+    """Make the entry what it was at ``revision``: a new write (the version it replaces is kept, so a
+    restore is undoable too). Brings a deleted entry back. ``If-Match`` is checked against the current entry."""
+    api_key = authorize(auth_header, keys)
+    require_write(api_key)
+    _require_revisions(store)
+    payload = _validate(RestoreInput, raw_body)
+    key = api_key.scope
+
+    current = await store.get(key, str(id))
+    if current is not None and not _etag_matches(if_match, current):
+        raise InkwireError("stale", "If-Match no longer matches: the entry changed since you read it")
+    found = next((r for r in await store.list_revisions(key, str(id)) if r["revision"] == payload.revision), None)  # type: ignore[attr-defined]
+    if found is None:
+        raise InkwireError("not_found", f"no revision '{payload.revision}' of entry '{id}'")
+    was = found["entry"]
+    _require_kind(was["kind"], config)
+    self_id = (current or {}).get("id") or str(id)
+    owner = await _find_one(store, key, kind=was["kind"], slug=was["slug"])
+    if owner is not None and owner.get("id") != self_id:
+        raise InkwireError("conflict", f"slug: '{was['slug']}' is already used by another entry")
+    if was.get("external_id") is not None:
+        other = await _find_one(store, key, kind=was["kind"], external_id=was["external_id"])
+        if other is not None and other.get("id") != self_id:
+            raise InkwireError("conflict", f"external_id '{was['external_id']}' is now used by another entry ({other['id']})")
+
+    if current is not None:
+        await _keep_revision(store, key, current, "restore", config)
+    fields = {k: v for k, v in was.items() if k not in ("id", "url", "etag", "version", "updated_at", "key")}
+    entry: StoredContent = {
+        **fields,  # type: ignore[typeddict-item]
+        "id": self_id,
+        "key": key,
+        # Rendered again: the sanitizer in force now applies, not the one at the time.
+        "html": await _render(store, key, was.get("markdown") or ""),
+        "updated_at": _now(),
+        "version": max(int((current or {}).get("version") or 0), int(was.get("version") or 0)) + 1,
+    }
+    saved = await store.save(key, entry)
+    if current is not None:
+        await _after_move(store, key, current, saved)
+    else:
+        await _follow_move(store, key, self_id, saved["id"])
+    warnings = await _warnings(store, key, config, {**saved, "url": public_url(saved, config)}, saved["id"])
+    return _ok({**_full(saved, config), "warnings": warnings}, {"ETag": entry_etag(saved)})
 
 
 # --- GET /api/redirects -----------------------------------------------------
@@ -884,6 +1043,8 @@ def _features(store: ContentStore, config: InkwireConfig) -> list[str]:
             features.append(feature)
             if feature == "media" and getattr(store, "fetches_media_urls", False):
                 features.append("media_url")
+    if _has_revisions(store):
+        features.append("revisions")
     features.append("warnings")
     if _has_redirects(store):
         features.append("redirects")
@@ -914,6 +1075,8 @@ def discovery_body(store: ContentStore, config: InkwireConfig | None = None) -> 
             limits["media_bytes"] = int(config.limits.media_bytes)
         if limits:
             body["limits"] = limits
+    if "revisions" in body["features"]:
+        body["limits"] = {**body.get("limits", {}), "revisions": _keep(config)}
     return body
 
 
@@ -944,6 +1107,9 @@ __all__ = [
     "handle_media_update",
     "handle_patch",
     "handle_redirect",
+    "handle_restore",
+    "handle_revision",
+    "handle_revisions",
     "handle_terms",
     "handle_upsert",
     "public_url",

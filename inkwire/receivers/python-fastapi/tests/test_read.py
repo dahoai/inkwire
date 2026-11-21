@@ -150,9 +150,9 @@ def test_read_only_key_can_list_drafts(api, create):
 def test_discovery_advertises_the_wired_features(api):
     body = api.get("/api/inkwire").json()
     assert body["inkwire"] == 1
-    assert body["features"] == ["upsert", "list", "get", "update", "delete", "terms", "media", "media_list", "media_update", "warnings", "redirects", "translations"]
+    assert body["features"] == ["upsert", "list", "get", "update", "delete", "terms", "media", "media_list", "media_update", "revisions", "warnings", "redirects", "translations"]
     assert body["kinds"] == ["post", "page"]
-    assert body["limits"] == {"markdown_bytes": 1000, "media_bytes": 1024}
+    assert body["limits"] == {"markdown_bytes": 1000, "media_bytes": 1024, "revisions": 50}
     assert body["site"] == {"name": "Acme", "url": "https://acme.test"}
 
 

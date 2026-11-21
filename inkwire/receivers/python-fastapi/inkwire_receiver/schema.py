@@ -298,6 +298,13 @@ class PatchInput(BaseModel):
         return self
 
 
+class RestoreInput(BaseModel):
+    """``POST /api/content/{id}/restore``: the revision to put back."""
+
+    model_config = ConfigDict(extra="forbid")
+    revision: str = Field(min_length=1, max_length=200)
+
+
 class MediaUrlInput(BaseModel):
     """``POST /api/media`` JSON variant: the receiver fetches and stores the file."""
 
@@ -343,6 +350,7 @@ __all__ = [
     "MediaUrlInput",
     "PatchInput",
     "PatchSeo",
+    "RestoreInput",
     "SeoInput",
     "KIND_PATTERN",
     "SLUG_PATTERN",

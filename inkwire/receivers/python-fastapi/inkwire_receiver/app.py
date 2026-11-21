@@ -42,6 +42,9 @@ from inkwire_receiver import (
     handle_media_update,
     handle_patch,
     handle_redirect,
+    handle_restore,
+    handle_revision,
+    handle_revisions,
     handle_terms,
     handle_upsert,
     parse_api_keys,
@@ -191,6 +194,32 @@ def create_app(
             if_match=request.headers.get("if-match"),
             keys=keys,
             store=store,
+            config=config,
+        )
+        return _json(status, headers, body)
+
+    @app.get("/api/content/{content_id}/revisions")
+    async def revisions(content_id: str, request: Request):
+        status, headers, body = await handle_revisions(auth_header=auth_header(request), id=content_id, keys=keys, store=store)
+        return _json(status, headers, body)
+
+    @app.get("/api/content/{content_id}/revisions/{revision}")
+    async def revision(content_id: str, revision: str, request: Request):
+        status, headers, body = await handle_revision(
+            auth_header=auth_header(request), id=content_id, revision=revision, keys=keys, store=store, config=config
+        )
+        return _json(status, headers, body)
+
+    @app.post("/api/content/{content_id}/restore")
+    async def restore(content_id: str, request: Request):
+        status, headers, body = await handle_restore(
+            auth_header=auth_header(request),
+            id=content_id,
+            raw_body=await request.body(),
+            if_match=request.headers.get("if-match"),
+            keys=keys,
+            store=store,
+            config=config,
         )
         return _json(status, headers, body)
 

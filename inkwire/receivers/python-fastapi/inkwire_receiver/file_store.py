@@ -207,7 +207,8 @@ def _edit_text(previous_raw: str, before: StoredContent, after: StoredContent) -
 class FileStore:
     """Stores entries as ``<root>/<kind>/<slug>.md``; ids are ``<kind>:<slug>``.
 
-    Redirects live in ``<root>/.redirects.json`` (the TypeScript FileStore's format).
+    Redirects live in ``<root>/.redirects.json`` and each entry's past versions in
+    ``<root>/.revisions/<kind>.<slug>.json``, newest first (the TypeScript FileStore's format).
     """
 
     translations = True
@@ -226,6 +227,7 @@ class FileStore:
         self.max_media_bytes = max_media_bytes
         self._media_lock = threading.Lock()
         self._redirects_lock = threading.Lock()
+        self._revisions_lock = threading.Lock()
 
     # --- path safety ------------------------------------------------------
 
@@ -559,6 +561,50 @@ class FileStore:
 
     async def move_redirects(self, key: str, from_id: str, to_id: str) -> None:
         await asyncio.to_thread(self._move_redirects_sync, from_id, to_id)
+
+    # --- revisions: one JSON list per entry (hidden like .redirects.json: never a kind, never served) ---
+
+    def _history_file(self, id: str) -> Path | None:
+        split = self.split_id(id)
+        return self.root / ".revisions" / f"{split[0]}.{split[1]}.json" if split else None
+
+    def _list_revisions_sync(self, id: str) -> list[dict]:
+        path = self._history_file(id)
+        try:
+            parsed = json.loads(path.read_text(encoding="utf-8")) if path else []
+        except FileNotFoundError:
+            return []
+        return [r for r in parsed if isinstance(r, dict)] if isinstance(parsed, list) else []
+
+    def _save_revision_sync(self, id: str, revision: dict, keep: int) -> None:
+        path = self._history_file(id)
+        if path is None:
+            return
+        with self._revisions_lock:
+            history = [revision, *self._list_revisions_sync(id)][:keep]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._atomic_write(path, json.dumps(history, ensure_ascii=False).encode("utf-8"))
+
+    def _move_revisions_sync(self, from_id: str, to_id: str) -> None:
+        src, dst = self._history_file(from_id), self._history_file(to_id)
+        if src is None or dst is None or src == dst:
+            return
+        with self._revisions_lock:
+            moved = self._list_revisions_sync(from_id)
+            if not moved:
+                return
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            self._atomic_write(dst, json.dumps([*moved, *self._list_revisions_sync(to_id)], ensure_ascii=False).encode("utf-8"))
+            src.unlink(missing_ok=True)
+
+    async def save_revision(self, key: str, id: str, revision: dict, keep: int) -> None:
+        await asyncio.to_thread(self._save_revision_sync, id, revision, keep)
+
+    async def list_revisions(self, key: str, id: str) -> list[dict]:
+        return await asyncio.to_thread(self._list_revisions_sync, id)
+
+    async def move_revisions(self, key: str, from_id: str, to_id: str) -> None:
+        await asyncio.to_thread(self._move_revisions_sync, from_id, to_id)
 
     async def list_media(self, key: str, filter: MediaListFilter) -> tuple[list[MediaResult], str | None]:
         return await asyncio.to_thread(self._list_media_sync, filter)

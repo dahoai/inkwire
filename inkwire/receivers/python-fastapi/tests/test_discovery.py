@@ -19,7 +19,7 @@ from inkwire_receiver.app import create_app
 from tests.conftest import KEYS, Api, bearer, make_config
 
 ALWAYS = ["upsert", "list", "get", "update", "delete", "terms"]
-SEO = ["warnings", "redirects", "translations"]
+SEO = ["revisions", "warnings", "redirects", "translations"]
 FULL = ALWAYS + ["media", "media_list", "media_update"] + SEO
 FULL_WITH_URLS = ALWAYS + ["media", "media_url", "media_list", "media_update"] + SEO
 
@@ -50,7 +50,8 @@ def test_schedule_is_a_config_flag_and_off_by_default():
         (("list_media",), ALWAYS + ["media", "media_update"] + SEO),
         (("list_media", "update_media"), ALWAYS + ["media"] + SEO),
         (("media", "list_media", "update_media"), ALWAYS + SEO),
-        (("save_redirect",), ALWAYS + ["media", "media_list", "media_update", "warnings", "translations"]),
+        (("save_redirect",), ALWAYS + ["media", "media_list", "media_update", "revisions", "warnings", "translations"]),
+        (("save_revision",), ALWAYS + ["media", "media_list", "media_update", "warnings", "redirects", "translations"]),
     ],
 )
 def test_media_features_follow_what_the_store_can_do(missing, expected):
@@ -94,7 +95,9 @@ def test_site_omits_what_is_not_set():
 
 def test_limits_are_unchanged():
     body = discovery_body(MemoryStore(), InkwireConfig(limits=Limits(markdown_bytes=10, media_bytes=20)))
-    assert body["limits"] == {"markdown_bytes": 10, "media_bytes": 20}
+    assert body["limits"] == {"markdown_bytes": 10, "media_bytes": 20, "revisions": 50}
+    kept = discovery_body(MemoryStore(), InkwireConfig(limits=Limits(revisions=3)))
+    assert kept["limits"] == {"revisions": 3}
 
 
 def test_the_discovery_endpoint(api):
