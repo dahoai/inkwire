@@ -248,7 +248,7 @@ npx inkwire-conformance https://www.example.com --key <full key> --readonly-key 
 # the API: every case for the advertised features; --seo also checks the page: SEO Profile 1 rendering
 ```
 
-Both write test entries (`external_id`s that start with `r` and a timestamp, or `seo-profile-`) to the site you point them at; run them against staging, or delete those entries afterwards.
+Both write test entries (`external_id`s that start with `r` and a timestamp, or `seo-profile-`) to the site you point them at and delete them when they finish (`--keep` leaves them). The API suite also uploads a 1×1 image, which stays (the protocol has no media delete), so prefer staging.
 
 ## 5. Connect your agent
 

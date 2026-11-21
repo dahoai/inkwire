@@ -18,7 +18,7 @@ You are probably here to add Inkwire to a site, or to change the protocol or a r
 
 ## The gate (a receiver is conformant when these pass)
 
-- API: `npx inkwire-conformance <site> --key <full key> --readonly-key <ro key>` runs every case for the features the site advertises (package in inkwire/conformance). It writes test entries; use staging.
+- API: `npx inkwire-conformance <site> --key <full key> --readonly-key <ro key>` runs every case for the features the site advertises (package in inkwire/conformance). It writes test entries and deletes them afterwards (`--keep` leaves them); its 1×1 test image stays, so prefer staging.
 - Rendered pages: add `--seo` to also check SEO Profile 1 output of a published entry's public page.
 - A reference receiver may skip only `schedule` (it holds nothing back); every other advertised feature must pass with 0 failed.
 - Own database? [Backing it with a database](inkwire/receivers/core-ts/README.md#backing-it-with-a-database): implement `ContentStore` and run `runStoreContract` from `inkwire-receiver-core/testing`.

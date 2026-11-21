@@ -1,8 +1,11 @@
 # Inkwire
 
-[![npm](https://img.shields.io/npm/v/inkwire-client.svg)](https://www.npmjs.com/package/inkwire-client)
-[![PyPI](https://img.shields.io/pypi/v/inkwire-client.svg)](https://pypi.org/project/inkwire-client/)
-[![Receiver PyPI](https://img.shields.io/pypi/v/inkwire-receiver-core.svg)](https://pypi.org/project/inkwire-receiver-core/)
+[![create-inkwire](https://img.shields.io/npm/v/create-inkwire.svg?label=create-inkwire)](https://www.npmjs.com/package/create-inkwire)
+[![receiver core](https://img.shields.io/npm/v/inkwire-receiver-core.svg?label=inkwire-receiver-core)](https://www.npmjs.com/package/inkwire-receiver-core)
+[![conformance](https://img.shields.io/npm/v/inkwire-conformance.svg?label=inkwire-conformance)](https://www.npmjs.com/package/inkwire-conformance)
+[![client npm](https://img.shields.io/npm/v/inkwire-client.svg?label=inkwire-client)](https://www.npmjs.com/package/inkwire-client)
+[![client PyPI](https://img.shields.io/pypi/v/inkwire-client.svg?label=inkwire-client%20(PyPI))](https://pypi.org/project/inkwire-client/)
+[![receiver PyPI](https://img.shields.io/pypi/v/inkwire-receiver-core.svg?label=inkwire-receiver-core%20(PyPI))](https://pypi.org/project/inkwire-receiver-core/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **Let your agent run your site's content.** Inkwire is a small, open protocol (REST + JSON) for managing content (blog posts, pages, docs) on a receiving website: upsert by `external_id`, list/read/edit/delete with `ETag`/`If-Match`, tags and categories (with a terms listing), scheduling, a media library (upload, browse, alt text), full SEO control (title, description, Open Graph, JSON-LD, noindex, canonical), server-side sanitization, and read-only keys for audits. The receiver is a drop-in: one command adds it to your site.
@@ -92,47 +95,63 @@ INKWIRE_API_KEYS=dev-key,audit-key:ro npm start &
 npx inkwire-conformance http://localhost:4000 --key dev-key --readonly-key audit-key
 ```
 
-`inkwire-conformance` is [a package of its own](inkwire/conformance/README.md): point it at any site, in any language, to prove it speaks the protocol (it writes entries and uploads an image, so use a staging site). In this repo, `npm run conformance` in `inkwire/receivers/node-express`, `inkwire/receivers/nextjs` or `inkwire/receivers/core-ts` starts the receiver on a free port, runs the suite and stops it, and [CI](.github/workflows/ci.yml) runs it against the TypeScript, Express, Next.js and Python receivers on every push.
+`inkwire-conformance` is [a package of its own](inkwire/conformance/README.md): point it at any site, in any language, to prove it speaks the protocol. It writes test entries and deletes them when it finishes (`--keep` leaves them); the one test image it uploads stays, since the protocol has no media delete, so prefer a staging site. In this repo, `npm run conformance` in `inkwire/receivers/node-express`, `inkwire/receivers/nextjs` or `inkwire/receivers/core-ts` starts the receiver on a free port, runs the suite and stops it, and [CI](.github/workflows/ci.yml) runs it against the TypeScript, Express, Next.js and Python receivers on every push.
 
 The suite proves the API. A site that renders returned URLs publicly can additionally run `npx inkwire-conformance <url> --key <key> --seo` to verify SEO Profile 1 page output (title, description, canonical, Open Graph, Twitter, robots, BlogPosting JSON-LD). The receivers themselves only implement the API, so they claim input conformance; the page examples in INSTALL.md (`nextjs/examples`, `node-express/examples`) are what pass the rendering gate.
 
-### Publish from Node
+### Publish and edit from Node
 
 ```bash
 npm install inkwire-client
 ```
 
 ```js
-import { publish } from "inkwire-client";
+import { publish, get, update } from "inkwire-client";
 
-await publish("http://localhost:3000", "dev-key", {
+const site = "http://localhost:4000"; // the Express receiver started above
+
+const { id } = await publish(site, "dev-key", {
   external_id: "my-post-1",
   title: "Hello",
   markdown: "# Hello\n\nFirst post via Inkwire.",
   status: "published",
 });
+
+// Later: read it, then change only the title. The ETag makes a concurrent edit fail (412) instead of overwriting it.
+const { etag } = await get(site, "dev-key", id);
+await update(site, "dev-key", id, { title: "Hello, world" }, { ifMatch: etag });
 ```
 
-### Publish from Python
+### Publish and edit from Python
 
 ```bash
 pip install inkwire-client
 ```
 
 ```python
-from inkwire_client import publish
+from inkwire_client import get, publish, update
 
-publish("http://localhost:3000", "dev-key", {
+site = "http://localhost:4000"
+
+entry = publish(site, "dev-key", {
     "external_id": "my-post-1",
     "title": "Hello",
     "markdown": "# Hello\n\nFirst post via Inkwire.",
     "status": "published",
 })
+
+_, etag = get(site, "dev-key", entry["id"])
+update(site, "dev-key", entry["id"], {"title": "Hello, world"}, if_match=etag)
 ```
 
 ## Status
 
-Inkwire is v1 (`Inkwire-Version: 1`, packages at 1.0.0): a frozen schema, a feature-gated conformance suite (`inkwire-conformance`), reference receivers (Express, Next.js, FastAPI) sharing one contract, a one-command installer (`create-inkwire`), and Node and Python clients. [DadSEO](https://getdadseo.com) runs it on its blog over Postgres as the first production adopter (store contract and conformance suite both pass there).
+Inkwire is v1 (`Inkwire-Version: 1`): a frozen schema, a feature-gated conformance suite (`inkwire-conformance`), reference receivers (Express, Next.js, FastAPI) sharing one contract, a one-command installer (`create-inkwire`), and Node and Python clients. The badges above show each package's current version.
+
+In production:
+
+- [DadSEO](https://getdadseo.com) runs a receiver on its blog over Postgres (store contract and conformance suite both pass there).
+- [Anaella](https://anaella.com) is a publisher and editor: connect any Inkwire site with its address and key, and Anaella's agent tools read, write and edit its posts, pages, SEO fields and media like a WordPress site's.
 
 ## License
 
