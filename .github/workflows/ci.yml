@@ -88,6 +88,7 @@ jobs:
             node ../../conformance/cli.mjs http://localhost:4010 --key dev-key --readonly-key audit-key
             code=$?
             kill $pid
+            wait $pid || true  # the next store's server needs the port free
             [ $code -eq 0 ] || exit $code
           done
 

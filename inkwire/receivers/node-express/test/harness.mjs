@@ -60,7 +60,8 @@ export async function runConformance({ command, args, cwd, env = {}, port, proje
     await waitFor(`${base}/api/inkwire`, { authorization: `Bearer ${keys.full}` });
     const out = await new Promise((resolve) => {
       const runner = spawn(process.execPath, [RUNNER], {
-        env: { ...process.env, BASE_URL: base, API_KEY: keys.full, READONLY_KEY: keys.ro },
+        // `checks` inspect what the suite wrote (a throwaway directory): keep it until they ran.
+        env: { ...process.env, BASE_URL: base, API_KEY: keys.full, READONLY_KEY: keys.ro, ...(checks ? { KEEP: "1" } : {}) },
         stdio: ["ignore", "pipe", "pipe"],
       });
       let output = "";
