@@ -373,3 +373,28 @@ def test_upload_media_needs_url_or_data():
     with pytest.raises(InkwireClientError) as ei:
         upload_media("https://site.test", "k")
     assert ei.value.code == "invalid_payload"
+
+
+def test_dry_runs_redirects_and_translation_filters(monkeypatch):
+    from inkwire_client import list as list_entries, redirect
+
+    warning = {"code": "title_duplicate", "field": "title", "message": "same"}
+    transport, calls = make_transport([
+        (200, {"id": None, "external_id": "e", "slug": "s", "kind": "post", "status": "draft", "created": True, "dry_run": True, "warnings": [warning]}),
+        (200, {"id": "a", "title": "New", "dry_run": True, "warnings": []}),
+        (200, {"kind": "post", "slug": "old", "id": "a", "url": "https://site.test/blog/new", "status": "published"}),
+        (404, {"error": {"code": "not_found", "message": "nothing redirects"}}),
+        (200, {"items": [], "next_cursor": None}),
+    ])
+    monkeypatch.setattr("inkwire_client._transport", transport, raising=False)
+    assert publish("https://site.test", "k", {"external_id": "e", "title": "T", "markdown": "x"}, retries=1, dry_run=True)["warnings"] == [warning]
+    entry, etag = update("https://site.test", "k", "a", {"lang": "fr", "translation_key": None}, retries=1, dry_run=True)
+    assert entry["dry_run"] is True and etag is None
+    assert redirect("https://site.test", "k", "post", "old", retries=1)["id"] == "a"
+    assert redirect("https://site.test", "k", "post", "never", retries=1) is None
+    list_entries("https://site.test", "k", retries=1, lang="fr", translation_key="home")
+    urls = [str(r.url) for r in calls["requests"]]
+    assert urls[0].endswith("/api/content?dry_run=true") and urls[1].endswith("/api/content/a?dry_run=true")
+    assert urls[2].endswith("/api/redirects?kind=post&slug=old")
+    assert "lang=fr" in urls[4] and "translation_key=home" in urls[4]
+    assert json.loads(calls["requests"][1].content) == {"lang": "fr", "translation_key": None}

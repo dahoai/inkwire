@@ -572,13 +572,13 @@ describe("discovery", () => {
     const d = discoveryBody(config, new MemoryStore());
     assert.equal(d.inkwire, 1);
     assert.deepEqual(d.kinds, ["post", "page"]);
-    assert.deepEqual(d.features, ["upsert", "list", "get", "update", "delete", "terms", "media", "media_url", "media_list", "media_update", "revisions"]);
+    assert.deepEqual(d.features, ["upsert", "list", "get", "update", "delete", "terms", "media", "media_url", "media_list", "media_update", "revisions", "warnings", "redirects", "translations"]);
     assert.deepEqual(d.limits, { markdown_bytes: 1000, media_bytes: 4000, revisions: 50 });
     assert.ok(!("revisions" in discoveryBody(config).limits), "no store, no revisions limit");
   });
   test("explicit features win and always include upsert; media features follow the store; schedule follows the config; default limits", () => {
     assert.deepEqual(discoveryBody({ ...config, features: ["list"] }).features, ["upsert", "list"]);
-    assert.deepEqual(discoveryBody(config).features, ["upsert", "list", "get", "update", "delete", "terms"]);
+    assert.deepEqual(discoveryBody(config).features, ["upsert", "list", "get", "update", "delete", "terms", "warnings"]);
     assert.ok(discoveryBody({ ...config, schedule: true }).features.includes("schedule"));
     assert.ok(!discoveryBody(config, new MemoryStore()).features.includes("schedule"));
     assert.ok(!discoveryBody({ ...config, fetchMedia: undefined }, new MemoryStore()).features.includes("media_url"), "no fetcher, no media_url");

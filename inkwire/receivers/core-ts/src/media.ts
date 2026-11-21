@@ -30,6 +30,48 @@ export function sniffImage(b: Uint8Array): ImageType | null {
   return null;
 }
 
+/**
+ * Width and height in pixels, read from the file's header; null when the header is not where it
+ * should be. The first `ispe` box of an AVIF (ponytail: the primary image in practice, not parsed by item).
+ */
+export function imageSize(b: Uint8Array, type: ImageType): { width: number; height: number } | null {
+  const u16be = (i: number) => (b[i]! << 8) | b[i + 1]!;
+  const u16le = (i: number) => b[i]! | (b[i + 1]! << 8);
+  const u24le = (i: number) => b[i]! | (b[i + 1]! << 8) | (b[i + 2]! << 16);
+  const u32be = (i: number) => ((b[i]! << 24) | (b[i + 1]! << 16) | (b[i + 2]! << 8) | b[i + 3]!) >>> 0;
+  const ascii = (i: number, n: number) => String.fromCharCode(...b.subarray(i, i + n));
+  const size = (width: number, height: number) =>
+    Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0 ? { width, height } : null;
+
+  if (type === "image/png" && b.length >= 24 && ascii(12, 4) === "IHDR") return size(u32be(16), u32be(20));
+  if (type === "image/gif" && b.length >= 10) return size(u16le(6), u16le(8));
+  if (type === "image/webp" && b.length >= 30) {
+    const chunk = ascii(12, 4);
+    if (chunk === "VP8 ") return size(u16le(26) & 0x3fff, u16le(28) & 0x3fff);
+    if (chunk === "VP8L") {
+      const bits = (b[21]! | (b[22]! << 8) | (b[23]! << 16) | (b[24]! << 24)) >>> 0;
+      return size((bits & 0x3fff) + 1, ((bits >>> 14) & 0x3fff) + 1);
+    }
+    if (chunk === "VP8X") return size(u24le(24) + 1, u24le(27) + 1);
+  }
+  if (type === "image/jpeg") {
+    for (let i = 2; i + 9 <= b.length; ) {
+      if (b[i] !== 0xff) return null;
+      const marker = b[i + 1]!;
+      if (marker === 0xff) { i++; continue; }
+      if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd8)) { i += 2; continue; }
+      // SOF0..SOF15 carry the frame size; C4 (DHT), C8 (JPG) and CC (DAC) are not frames.
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) return size(u16be(i + 7), u16be(i + 5));
+      i += 2 + u16be(i + 2);
+    }
+  }
+  if (type === "image/avif") {
+    const at = Buffer.from(b.subarray(0, Math.min(b.length, 65_536))).indexOf("ispe");
+    if (at >= 4 && at + 16 <= b.length) return size(u32be(at + 8), u32be(at + 12));
+  }
+  return null;
+}
+
 const looksLikeSvg = (b: Uint8Array) => {
   const head = Buffer.from(b.subarray(0, 2048)).toString("utf8").toLowerCase();
   return head.includes("<svg") || (head.trimStart().startsWith("<?xml") && head.includes("svg"));

@@ -35,6 +35,51 @@ def sniff_image(data: bytes) -> str | None:
     return None
 
 
+def image_size(data: bytes, mime: str) -> tuple[int, int] | None:
+    """Width and height in pixels from the file's header, or ``None`` (same rules as the TS core)."""
+
+    def ok(w: int, h: int) -> tuple[int, int] | None:
+        return (w, h) if w > 0 and h > 0 else None
+
+    u16le = lambda i: int.from_bytes(data[i : i + 2], "little")  # noqa: E731
+    u16be = lambda i: int.from_bytes(data[i : i + 2], "big")  # noqa: E731
+    u24le = lambda i: int.from_bytes(data[i : i + 3], "little")  # noqa: E731
+    u32be = lambda i: int.from_bytes(data[i : i + 4], "big")  # noqa: E731
+    if mime == "image/png" and len(data) >= 24 and data[12:16] == b"IHDR":
+        return ok(u32be(16), u32be(20))
+    if mime == "image/gif" and len(data) >= 10:
+        return ok(u16le(6), u16le(8))
+    if mime == "image/webp" and len(data) >= 30:
+        chunk = data[12:16]
+        if chunk == b"VP8 ":
+            return ok(u16le(26) & 0x3FFF, u16le(28) & 0x3FFF)
+        if chunk == b"VP8L":
+            bits = int.from_bytes(data[21:25], "little")
+            return ok((bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1)
+        if chunk == b"VP8X":
+            return ok(u24le(24) + 1, u24le(27) + 1)
+    if mime == "image/jpeg":
+        i = 2
+        while i + 9 <= len(data):
+            if data[i] != 0xFF:
+                return None
+            marker = data[i + 1]
+            if marker == 0xFF:
+                i += 1
+                continue
+            if marker == 0x01 or 0xD0 <= marker <= 0xD8:
+                i += 2
+                continue
+            if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                return ok(u16be(i + 7), u16be(i + 5))
+            i += 2 + u16be(i + 2)
+    if mime == "image/avif":
+        at = data.find(b"ispe", 0, 65_536)
+        if at >= 4 and at + 16 <= len(data):
+            return ok(u32be(at + 8), u32be(at + 12))
+    return None
+
+
 def looks_like_svg(data: bytes, filename: str | None = None, content_type: str | None = None) -> bool:
     """SVG is refused by name, by declared type and by content."""
     name = (filename or "").lower()

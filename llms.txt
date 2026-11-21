@@ -1,6 +1,6 @@
 # Inkwire
 
-> Inkwire is an open protocol (REST + JSON) for managing content (blog posts, pages, docs) on any website: upsert by external_id, read/list/edit/delete with ETag/If-Match, undo (every change and delete keeps the version it replaced; restore puts one back), tags and categories with a terms listing, scheduling, a media library (upload, list, alt text), full SEO control (Open Graph, JSON-LD, noindex), server-side Markdown sanitization, read-only keys. A site that implements it can be operated by an agent or a CMS tool.
+> Inkwire is an open protocol (REST + JSON) for managing content (blog posts, pages, docs) on any website: upsert by external_id, read/list/edit/delete with ETag/If-Match, undo (every change and delete keeps the version it replaced; restore puts one back), SEO warnings on every write plus dry runs (`?dry_run=true`), redirects from old addresses after a slug change, translations (lang + translation_key -> hreflang), image sizes, tags and categories with a terms listing, scheduling, a media library (upload, list, alt text), full SEO control (Open Graph, JSON-LD, noindex), server-side Markdown sanitization, read-only keys. A site that implements it can be operated by an agent or a CMS tool.
 
 You are probably here to add Inkwire to a site, or to change the protocol or a receiver. Read in this order.
 
@@ -15,7 +15,7 @@ You are probably here to add Inkwire to a site, or to change the protocol or a r
 
 - [inkwire/SPEC.md](inkwire/SPEC.md): source of truth for endpoints, fields, error codes, SEO Profile 1.
 - [inkwire/schema/](inkwire/schema/): JSON Schemas (content, patch, media, discovery); authoritative where prose and schema disagree.
-- Endpoints: `POST/GET /api/content`, `GET/PATCH/DELETE /api/content/{id}`, `GET /api/terms`, `POST/GET /api/media`, `PATCH /api/media/{id}`, `GET /api/content/{id}/revisions[/{revision}]` and `POST /api/content/{id}/restore` (feature `revisions`), `GET /api/inkwire` (discovery: features, kinds, limits). Bearer auth; keys ending `:ro` are read-only. Every response carries `Inkwire-Version: 1`. Errors are `{"error":{"code","message"}}`.
+- Endpoints: `POST/GET /api/content`, `GET/PATCH/DELETE /api/content/{id}`, `GET /api/terms`, `POST/GET /api/media`, `PATCH /api/media/{id}`, `GET /api/content/{id}/revisions[/{revision}]` and `POST /api/content/{id}/restore` (feature `revisions`), `GET /api/redirects?kind=&slug=` (feature `redirects`), `GET /api/inkwire` (discovery: features, kinds, limits). Bearer auth; keys ending `:ro` are read-only. Every response carries `Inkwire-Version: 1`. Errors are `{"error":{"code","message"}}`.
 
 ## The gate (a receiver is conformant when these pass)
 

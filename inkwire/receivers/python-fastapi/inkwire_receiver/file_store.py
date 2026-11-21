@@ -27,7 +27,7 @@ from typing import Any
 import yaml
 
 from .errors import InkwireError
-from .media import extension_for, validate_image
+from .media import extension_for, image_size, validate_image
 from .render import render_markdown
 from .schema import KIND_RE, SLUG_RE
 from .store import (
@@ -418,6 +418,9 @@ class FileStore:
             "title": None,
             "size": len(upload.data),
         }
+        dims = image_size(upload.data, upload.content_type)
+        if dims:
+            meta["width"], meta["height"] = dims
         # the image first, the sidecar last: a library entry only exists once its sidecar does
         self._atomic_write(self._media_dir / filename, upload.data)
         self._write_media_meta(self._media_dir / f"{filename}{MEDIA_SIDECAR}", meta)
@@ -434,6 +437,8 @@ class FileStore:
             title=meta.get("title"),
             mime_type=meta["mime_type"],
             created_at=meta["created_at"],
+            width=meta["width"] if isinstance(meta.get("width"), int) else None,
+            height=meta["height"] if isinstance(meta.get("height"), int) else None,
         )
 
     def _read_media_meta(self, path: Path) -> dict | None:

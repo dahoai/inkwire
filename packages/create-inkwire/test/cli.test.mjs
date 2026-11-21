@@ -54,7 +54,7 @@ describe("next", () => {
       assert.ok(existsSync(path.join(dir, f)), f);
     }
     assert.ok(existsSync(path.join(dir, "content/.gitkeep")));
-    assert.equal(JSON.parse(read(dir, "package.json")).dependencies["inkwire-receiver-core"], "^1.1.0");
+    assert.equal(JSON.parse(read(dir, "package.json")).dependencies["inkwire-receiver-core"], "^1.2.0");
     const env = read(dir, ".env.local");
     const keys = keysIn(env);
     assert.ok(keys && keys[0] !== keys[1]);

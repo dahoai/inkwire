@@ -1,7 +1,7 @@
 import { InkwireError } from "./errors.js";
 import type { ListFilter, MediaListFilter, MediaListResult, StoredContent, StoredMedia } from "./store.js";
 
-/** The filter semantics every store implements (status, kind, tag, search, external_id, slug). */
+/** The filter semantics every store implements (status, kind, tag, category, search, external_id, slug, lang, translation_key). */
 export function matches(e: StoredContent, f: ListFilter): boolean {
   if (f.status && e.status !== f.status) return false;
   if (f.kind && e.kind !== f.kind) return false;
@@ -9,6 +9,8 @@ export function matches(e: StoredContent, f: ListFilter): boolean {
   if (f.external_id !== undefined && e.external_id !== f.external_id) return false;
   if (f.tag && !(e.tags ?? []).includes(f.tag)) return false;
   if (f.category && !(e.categories ?? []).includes(f.category)) return false;
+  if (f.lang && e.lang !== f.lang) return false;
+  if (f.translation_key && e.translation_key !== f.translation_key) return false;
   if (f.search) {
     const q = f.search.toLowerCase();
     const hay = `${e.title}\n${e.excerpt ?? ""}\n${e.markdown}`.toLowerCase();

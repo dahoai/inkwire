@@ -45,6 +45,7 @@ const FIXTURES = {
     seo: true,
     files: {
       "app/blog/[slug]/page.tsx": () => example("nextjs/examples/blog/[slug]/page.tsx"),
+      "app/sitemap.ts": () => example("nextjs/examples/sitemap.ts"),
       "package.json": {
         name: "fixture-next", private: true,
         dependencies: { next: "^15.0.0", react: "^19.0.0", "react-dom": "^19.0.0" },
@@ -130,7 +131,7 @@ async function one(name) {
     if (!readdirSync(path.join(dir, "content/post")).some((n) => n !== "hand-written.md" && n.endsWith(".md"))) throw new Error("published entries are not files under content/post");
     let more = "extra checks: hand-written file listed, upload stored and served, sidecar private, entries are files\n";
     if (f.seo) {
-      const seo = spawnSync(process.execPath, [SEO_RUNNER], { env: { ...process.env, BASE_URL: base, API_KEY: key }, encoding: "utf8" });
+      const seo = spawnSync(process.execPath, [SEO_RUNNER], { env: { ...process.env, BASE_URL: base, API_KEY: key, SITEMAP: "1" }, encoding: "utf8" });
       if (seo.status !== 0) throw new Error(`SEO rendering conformance failed:\n${seo.stdout}${seo.stderr}`);
       more += `seo-runner: ${seo.stdout.trim().split("\n").join(" | ")}\n`;
     }

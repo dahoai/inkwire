@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  InkwireClientError, capabilities, edits, get, isScheduled, list, listMedia, publish, remove, restore, revision, revisions, terms, update, updateMedia, uploadMedia,
+  InkwireClientError, capabilities, edits, get, isScheduled, list, listMedia, publish, redirect, remove, restore, revision, revisions, terms, update, updateMedia, uploadMedia,
 } from "../index";
 
 interface Seen { method: string; url: string; headers: IncomingMessage["headers"]; body: Buffer }
@@ -499,5 +499,33 @@ describe("retries", () => {
       "PATCH https://s.test/api/media/m",
     ]);
     expect(seen).toHaveLength(0);
+  });
+});
+
+describe("dry runs, warnings, redirects", () => {
+  it("dryRun adds ?dry_run=true to publish and update and passes warnings through", async () => {
+    const warnings = [{ code: "title_duplicate", field: "title", message: "same as another page" }];
+    replies = [{ json: { id: null, external_id: "e", slug: "s", kind: "post", status: "draft", created: true, dry_run: true, warnings } }];
+    const r = await publish(base, "k", { external_id: "e", title: "T", markdown: "x" }, { dryRun: true });
+    expect(r).toMatchObject({ id: null, dry_run: true, warnings });
+    replies = [{ json: { id: "a", title: "New", dry_run: true, warnings: [] } }];
+    const u = await update(base, "k", "a", { title: "New", lang: "fr", translation_key: null }, { dryRun: true, ifMatch: '"e1"' });
+    expect(u).toMatchObject({ content: { dry_run: true }, etag: null });
+    expect(seen.map((x) => [x.method, x.url])).toEqual([["POST", "/api/content?dry_run=true"], ["PATCH", "/api/content/a?dry_run=true"]]);
+    expect(seen[1]!.headers["if-match"]).toBe('"e1"');
+    expect(JSON.parse(seen[1]!.body.toString())).toEqual({ title: "New", lang: "fr", translation_key: null });
+  });
+
+  it("redirect: where an old address leads, or null", async () => {
+    replies = [{ json: { kind: "post", slug: "old", id: "a", url: "https://site.test/blog/new", status: "published" } }, { status: 404, json: { error: { code: "not_found", message: "nothing redirects" } } }];
+    expect(await redirect(base, "k", "post", "old")).toMatchObject({ id: "a", url: "https://site.test/blog/new" });
+    expect(await redirect(base, "k", "post", "never")).toBeNull();
+    expect(seen[0]!.url).toBe("/api/redirects?kind=post&slug=old");
+  });
+
+  it("list filters by lang and translation_key", async () => {
+    replies = [{ json: { items: [], next_cursor: null } }];
+    await list(base, "k", { translation_key: "home", lang: "fr" });
+    expect(seen[0]!.url).toBe("/api/content?translation_key=home&lang=fr");
   });
 });

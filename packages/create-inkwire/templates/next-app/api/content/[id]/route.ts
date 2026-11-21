@@ -23,6 +23,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
       authHeader: req.headers.get("authorization"),
       id,
       rawBody: await req.text(),
+      query: new URL(req.url).searchParams,
       ifMatchHeader: req.headers.get("if-match"),
       keys,
       store,

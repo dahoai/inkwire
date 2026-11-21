@@ -36,9 +36,9 @@ At startup it reads the site's discovery (`GET /api/inkwire`) and offers only wh
 | Tool | Feature | What it does |
 | --- | --- | --- |
 | `site` | always | the site's name, kinds, features and limits |
-| `list` | `list` | search and page through entries (kind, status, words, tag, category) |
+| `list` | `list` | search and page through entries (kind, status, words, tag, category; language with `translations`) |
 | `get` | `get` | one entry: its markdown and the SEO values the site really uses |
-| `create` | `upsert` | a new post or page, as a draft unless told to publish |
+| `create` | `upsert` | a new post or page, as a draft unless told to publish; `dry_run` checks it with the site first (with `warnings`) |
 | `update` | `get` + `update` | change text with exact `{find, replace}` edits, or any field; `dry_run` returns the before and after without writing |
 | `delete` | `delete` | take an entry off the site |
 | `history` | `revisions` | an entry's earlier versions, newest first (a deleted entry's too), or one in full |
@@ -52,6 +52,7 @@ At startup it reads the site's discovery (`GET /api/inkwire`) and offers only wh
 
 - **Preview, then apply.** The agent is told to run every change with `dry_run` first and show you the before and after. The preview of a text edit is the edit itself, not the whole page twice.
 - **Undo.** On a site with `revisions`, every change and every delete keeps the version it replaced. *"Undo that"* is one `restore`, previewed first like any change, and a restore is itself undoable.
+- **SEO advice from the site itself.** On a site with `warnings`, every preview and write comes back with them: a duplicate title, no description, a broken link, an image without alt text. On a site with `redirects`, a slug change keeps the old address working.
 - **No silent overwrites.** `update` reads the entry and writes with its `ETag`: if someone changed the page in between, the write is refused (`stale`) and the agent reads it again.
 - **Exact edits.** Each `find` must occur exactly once in the page, or nothing changes.
 - **Drafts first.** New entries are drafts; a future `published_at` is refused on a site that cannot schedule, instead of publishing at once.

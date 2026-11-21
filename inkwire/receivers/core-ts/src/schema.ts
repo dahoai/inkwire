@@ -28,6 +28,9 @@ const jsonLd = z
     },
     { message: "must be one JSON object, or an array of objects, as a string" },
   );
+/** BCP 47, e.g. "en", "fr-CA", "zh-Hant". */
+const lang = z.string().max(35).regex(/^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*$/, "must be a BCP 47 language tag, e.g. en or fr-CA");
+const translationKey = z.string().min(1).max(255);
 const author = z
   .object({ name: z.string().optional(), email: z.string().email().optional() })
   .strict();
@@ -58,6 +61,8 @@ export const ContentInput = z
       .strict()
       .optional(),
     author: author.optional(),
+    lang: lang.optional(),
+    translation_key: translationKey.optional(),
     status: z.enum(["draft", "published"]).default("draft"),
     published_at: publishedAt.optional(),
   })
@@ -90,6 +95,8 @@ export const PatchSchema = z
       .strict()
       .nullable(),
     author: author.nullable(),
+    lang: lang.nullable(),
+    translation_key: translationKey.nullable(),
     status: z.enum(["draft", "published"]),
     published_at: publishedAt.nullable(),
   })

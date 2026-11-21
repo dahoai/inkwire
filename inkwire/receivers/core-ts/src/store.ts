@@ -41,6 +41,10 @@ export interface StoredContent {
   canonical_url?: string;
   seo: SeoOverrides | null;
   author?: { name?: string; email?: string };
+  /** BCP 47 language of this entry (feature `translations`). */
+  lang?: string;
+  /** Entries sharing it are translations of each other (feature `translations`). */
+  translation_key?: string;
   status: "draft" | "published";
   published_at: string;
   updated_at: string;
@@ -62,6 +66,9 @@ export interface ListFilter {
   search?: string;
   external_id?: string;
   slug?: string;
+  /** Feature `translations`: exact matches. */
+  lang?: string;
+  translation_key?: string;
   limit: number;
   cursor?: string;
 }
@@ -78,6 +85,9 @@ export interface StoredMedia {
   title?: string;
   /** One of image/jpeg, png, gif, webp, avif. */
   mime_type: string;
+  /** Pixels, when the receiver could read them from the file. */
+  width?: number;
+  height?: number;
   created_at: string;
 }
 
@@ -99,6 +109,9 @@ export interface MediaInput {
   contentType: string;
   filename: string;
   alt?: string;
+  /** Read from the bytes by the core when it can. */
+  width?: number;
+  height?: number;
 }
 
 /**
@@ -113,6 +126,14 @@ export interface StoredRevision {
   /** What replaced it. */
   replaced_by: "update" | "restore" | "delete";
   entry: Omit<StoredContent, "key">;
+}
+
+/** An old address of an entry (feature `redirects`): `kind`/`slug` now lead to the entry `id`. */
+export interface StoredRedirect {
+  kind: string;
+  slug: string;
+  id: string;
+  created_at: string;
 }
 
 /**
@@ -141,4 +162,14 @@ export interface ContentStore {
   listRevisions?(key: string, id: string): Promise<StoredRevision[]>;
   /** The entry's id changed (a slug or kind change in a store whose ids follow them): its history follows it. */
   moveRevisions?(key: string, fromId: string, toId: string): Promise<void>;
+  /**
+   * Redirects (all three, or none: a store without them makes the receiver omit `redirects`).
+   * `saveRedirect` replaces any redirect from the same kind and slug.
+   */
+  saveRedirect?(key: string, redirect: StoredRedirect): Promise<void>;
+  findRedirect?(key: string, kind: string, slug: string): Promise<StoredRedirect | null>;
+  /** The entry's id changed: redirects to `fromId` now lead to `toId`. */
+  moveRedirects?(key: string, fromId: string, toId: string): Promise<void>;
+  /** True when the store keeps `lang` and `translation_key` and filters `list` by them (feature `translations`). */
+  readonly translations?: boolean;
 }

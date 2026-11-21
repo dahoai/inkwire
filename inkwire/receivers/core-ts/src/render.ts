@@ -25,6 +25,20 @@ export function renderMarkdown(markdown: string): string {
   });
 }
 
+/**
+ * Gives each `<img>` of rendered HTML whose `src` is a known media item its pixel size, so the page
+ * does not shift while images load. Images that already say a width are left alone.
+ */
+export function sizeImages(html: string, sizes: Map<string, { width: number; height: number }>): string {
+  if (sizes.size === 0) return html;
+  return html.replace(/<img\b([^>]*?)(\s*\/?)>/g, (tag, attrs: string, end: string) => {
+    if (/\swidth=/.test(attrs)) return tag;
+    const src = /\ssrc="([^"]*)"/.exec(attrs)?.[1];
+    const size = src ? sizes.get(src.replace(/&amp;/g, "&")) : undefined;
+    return size ? `<img${attrs} width="${size.width}" height="${size.height}"${end}>` : tag;
+  });
+}
+
 /** Lowercase, non-alphanumerics to "-", trimmed, at most 255 chars. Falls back to "entry". */
 export function slugify(s: string): string {
   return (

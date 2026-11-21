@@ -855,7 +855,7 @@
   "endpoint": "/api/media"
  },
  {
-  "name": "media multipart upload -> 200",
+  "name": "media multipart upload -> 200, with the image's size",
   "feature": "media",
   "multipart": {
    "file": {
@@ -873,7 +873,9 @@
    "path": {
     "id": "present",
     "url": "present",
-    "alt": "One pixel"
+    "alt": "One pixel",
+    "width": 1,
+    "height": 1
    }
   },
   "endpoint": "/api/media"
@@ -1831,6 +1833,299 @@
   "expect": {
    "status": 404,
    "errorCode": "not_found"
+  }
+ },
+ {
+  "name": "every write answers with its warnings",
+  "feature": "warnings",
+  "body": {
+   "external_id": "{{run}}-w-1",
+   "title": "Twin title {{run}}",
+   "markdown": "## Part\n\nText.",
+   "status": "published",
+   "excerpt": "Twin text {{run}}"
+  },
+  "captureBodyAs": "w1",
+  "expect": {
+   "status": 200,
+   "path": {
+    "warnings": "present"
+   }
+  }
+ },
+ {
+  "name": "a duplicate title and description are warnings, not errors",
+  "feature": "warnings",
+  "body": {
+   "external_id": "{{run}}-w-2",
+   "title": "Twin title {{run}}",
+   "markdown": "## Part\n\nText.",
+   "status": "published",
+   "excerpt": "Twin text {{run}}"
+  },
+  "expect": {
+   "status": 200,
+   "warningCodes": [
+    "title_duplicate",
+    "description_duplicate"
+   ]
+  }
+ },
+ {
+  "name": "a level-1 heading in the body and an image without alt text are warnings",
+  "feature": "warnings",
+  "body": {
+   "external_id": "{{run}}-w-3",
+   "title": "Warn {{run}}-w-3",
+   "markdown": "# Second H1\n\n![](https://example.com/x.png)",
+   "status": "published"
+  },
+  "expect": {
+   "status": 200,
+   "warningCodes": [
+    "h1_extra",
+    "image_alt_missing"
+   ]
+  }
+ },
+ {
+  "name": "dry run: the answer a create would give, nothing written",
+  "feature": "warnings",
+  "endpoint": "/api/content?dry_run=true",
+  "body": {
+   "external_id": "{{run}}-w-dry",
+   "title": "Twin title {{run}}",
+   "markdown": "## Part\n\nText.",
+   "status": "published"
+  },
+  "expect": {
+   "status": 200,
+   "absentEtag": true,
+   "json": {
+    "dry_run": true,
+    "created": true
+   },
+   "path": {
+    "id": "absent"
+   },
+   "warningCodes": [
+    "title_duplicate"
+   ]
+  }
+ },
+ {
+  "name": "the dry run left nothing behind",
+  "feature": "list",
+  "requiresFeatures": [
+   "warnings"
+  ],
+  "method": "GET",
+  "endpoint": "/api/content?external_id={{run}}-w-dry",
+  "expect": {
+   "status": 200,
+   "path": {
+    "items.0": "absent"
+   }
+  }
+ },
+ {
+  "name": "a read-only key may dry-run a write",
+  "feature": "warnings",
+  "auth": "ro",
+  "endpoint": "/api/content?dry_run=true",
+  "body": {
+   "external_id": "{{run}}-w-ro",
+   "title": "Warn {{run}}-w-ro",
+   "markdown": "## Part\n\nText.",
+   "status": "published"
+  },
+  "expect": {
+   "status": 200,
+   "json": {
+    "dry_run": true
+   }
+  }
+ },
+ {
+  "name": "PATCH dry run: the entry as it would be, nothing written",
+  "feature": "warnings",
+  "requiresFeatures": [
+   "update",
+   "get"
+  ],
+  "method": "PATCH",
+  "endpoint": "/api/content/{{w1.id}}?dry_run=true",
+  "body": {
+   "title": "Changed {{run}}"
+  },
+  "expect": {
+   "status": 200,
+   "absentEtag": true,
+   "json": {
+    "dry_run": true
+   },
+   "path": {
+    "title": "Changed {{run}}",
+    "id": "{{w1.id}}",
+    "warnings": "present"
+   }
+  }
+ },
+ {
+  "name": "the PATCH dry run left the entry as it was",
+  "feature": "get",
+  "requiresFeatures": [
+   "warnings",
+   "update"
+  ],
+  "method": "GET",
+  "endpoint": "/api/content/{{w1.id}}",
+  "expect": {
+   "status": 200,
+   "path": {
+    "title": "Twin title {{run}}"
+   }
+  }
+ },
+ {
+  "name": "a dry run checks If-Match like the write",
+  "feature": "warnings",
+  "requiresFeatures": [
+   "update"
+  ],
+  "method": "PATCH",
+  "endpoint": "/api/content/{{w1.id}}?dry_run=true",
+  "headers": {
+   "if-match": "\"not-the-etag\""
+  },
+  "body": {
+   "title": "x"
+  },
+  "expect": {
+   "status": 412,
+   "errorCode": "stale"
+  }
+ },
+ {
+  "name": "a slug change leaves a redirect from the old address",
+  "feature": "redirects",
+  "requiresFeatures": [
+   "update"
+  ],
+  "setup": [
+   {
+    "body": {
+     "external_id": "{{run}}-r-1",
+     "title": "Warn {{run}}-r-1",
+     "markdown": "## Part\n\nText.",
+     "status": "published",
+     "slug": "{{run}}-old-name"
+    },
+    "captureBodyAs": "r1"
+   },
+   {
+    "method": "PATCH",
+    "endpoint": "/api/content/{{r1.id}}",
+    "body": {
+     "slug": "{{run}}-new-name"
+    },
+    "captureBodyAs": "r1new"
+   }
+  ],
+  "method": "GET",
+  "endpoint": "/api/redirects?kind=post&slug={{run}}-old-name",
+  "expect": {
+   "status": 200,
+   "path": {
+    "id": "{{r1new.id}}",
+    "url": "{{r1new.url}}",
+    "kind": "post",
+    "slug": "{{run}}-old-name"
+   }
+  }
+ },
+ {
+  "name": "no redirect from an address an entry lives at",
+  "feature": "redirects",
+  "requiresFeatures": [
+   "update"
+  ],
+  "method": "GET",
+  "endpoint": "/api/redirects?kind=post&slug={{run}}-new-name",
+  "expect": {
+   "status": 404,
+   "errorCode": "not_found"
+  }
+ },
+ {
+  "name": "no redirect from an unknown address",
+  "feature": "redirects",
+  "method": "GET",
+  "endpoint": "/api/redirects?kind=post&slug={{run}}-never-was",
+  "expect": {
+   "status": 404,
+   "errorCode": "not_found"
+  }
+ },
+ {
+  "name": "lang and translation_key are kept",
+  "feature": "translations",
+  "requiresFeatures": [
+   "get"
+  ],
+  "setup": [
+   {
+    "body": {
+     "external_id": "{{run}}-t-en",
+     "title": "Warn {{run}}-t-en",
+     "markdown": "## Part\n\nText.",
+     "status": "published",
+     "lang": "en",
+     "translation_key": "{{run}}-home"
+    },
+    "captureBodyAs": "ten"
+   }
+  ],
+  "method": "GET",
+  "endpoint": "/api/content/{{ten.id}}",
+  "expect": {
+   "status": 200,
+   "path": {
+    "lang": "en",
+    "translation_key": "{{run}}-home"
+   }
+  }
+ },
+ {
+  "name": "list filters by translation_key",
+  "feature": "translations",
+  "requiresFeatures": [
+   "list"
+  ],
+  "method": "GET",
+  "endpoint": "/api/content?translation_key={{run}}-home",
+  "expect": {
+   "status": 200,
+   "path": {
+    "items.0.id": "{{ten.id}}",
+    "items.0.lang": "en",
+    "items.1": "absent"
+   }
+  }
+ },
+ {
+  "name": "a lang that is not a BCP 47 tag -> 400",
+  "feature": "translations",
+  "body": {
+   "external_id": "{{run}}-t-bad",
+   "title": "Warn {{run}}-t-bad",
+   "markdown": "## Part\n\nText.",
+   "status": "published",
+   "lang": "not a language"
+  },
+  "expect": {
+   "status": 400,
+   "errorCode": "invalid_payload"
   }
  }
 ]

@@ -62,6 +62,8 @@ class ContentSummary(TypedDict, total=False):
     excerpt: Optional[str]
     tags: List[str]
     categories: List[str]
+    lang: str
+    translation_key: str
     published_at: str
     updated_at: str
 
@@ -73,6 +75,26 @@ class Content(ContentSummary, total=False):
     canonical_url: Optional[str]
     author: Optional[dict]
     seo: EffectiveSeo
+    warnings: List["Warning"]
+    dry_run: bool
+
+
+class Warning(TypedDict):
+    """SEO advice on an entry as written (feature ``warnings``); never blocks the write. Unknown codes may appear."""
+
+    code: str
+    field: str
+    message: str
+
+
+class Redirect(TypedDict):
+    """Where an old address leads (feature ``redirects``)."""
+
+    kind: str
+    slug: str
+    id: str
+    url: str
+    status: Literal["draft", "published"]
 
 
 class Term(TypedDict):
@@ -100,6 +122,8 @@ class MediaItem(_MediaRequired, total=False):
 
     alt: str
     title: str
+    width: int
+    height: int
 
 
 class MediaListResult(TypedDict):
@@ -174,8 +198,9 @@ def _call(
         client.close()
 
 
-def publish(base_url: str, api_key: str, payload: dict, retries: int = 3) -> dict:
-    url = base_url.rstrip("/") + "/api/content"
+def publish(base_url: str, api_key: str, payload: dict, retries: int = 3, *, dry_run: bool = False) -> dict:
+    """POST /api/content. ``dry_run`` (feature ``warnings``): the answer and warnings the write would give, nothing written."""
+    url = base_url.rstrip("/") + "/api/content" + ("?dry_run=true" if dry_run else "")
     headers = {
         "content-type": "application/json",
         "authorization": f"Bearer {api_key}",
@@ -216,6 +241,8 @@ def list(
     search: str | None = None,
     external_id: str | None = None,
     slug: str | None = None,
+    lang: str | None = None,
+    translation_key: str | None = None,
     limit: int | None = None,
     cursor: str | None = None,
 ) -> dict:
@@ -230,6 +257,8 @@ def list(
         "search": search,
         "external_id": external_id,
         "slug": slug,
+        "lang": lang,
+        "translation_key": translation_key,
         "limit": limit,
         "cursor": cursor,
     }
@@ -253,9 +282,12 @@ def update(
     patch: dict,
     if_match: str | None = None,
     retries: int = 3,
+    *,
+    dry_run: bool = False,
 ) -> tuple[dict, str | None]:
+    """PATCH /api/content/{id}. ``dry_run`` (feature ``warnings``): the entry as it would be, nothing written (no ETag)."""
     quoted_id = urllib.parse.quote(id, safe="")
-    url = f"{base_url.rstrip('/')}/api/content/{quoted_id}"
+    url = f"{base_url.rstrip('/')}/api/content/{quoted_id}" + ("?dry_run=true" if dry_run else "")
     headers = {
         "content-type": "application/json",
         "authorization": f"Bearer {api_key}",
@@ -279,6 +311,18 @@ def remove(
     if if_match is not None:
         headers["if-match"] = if_match
     res = _call("DELETE", url, headers=headers, retries=retries)
+    return res.json()
+
+
+def redirect(base_url: str, api_key: str, kind: str, slug: str, retries: int = 3) -> Redirect | None:
+    """GET /api/redirects (feature ``redirects``): where an old address leads now, or ``None``."""
+    url = base_url.rstrip("/") + "/api/redirects"
+    try:
+        res = _call("GET", url, headers={"authorization": f"Bearer {api_key}"}, params={"kind": kind, "slug": slug}, retries=retries)
+    except InkwireClientError as e:
+        if e.http_status == 404:
+            return None
+        raise
     return res.json()
 
 
@@ -456,6 +500,7 @@ __all__ = [
     "get",
     "update",
     "remove",
+    "redirect",
     "revisions",
     "revision",
     "restore",
@@ -473,4 +518,6 @@ __all__ = [
     "TermsResult",
     "MediaItem",
     "MediaListResult",
+    "Warning",
+    "Redirect",
 ]

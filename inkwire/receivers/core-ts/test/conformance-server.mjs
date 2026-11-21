@@ -16,6 +16,7 @@ import {
   handleMediaUpdate,
   handleTerms,
   handlePatch,
+  handleRedirect,
   handleRestore,
   handleRevision,
   handleRevisions,
@@ -57,16 +58,17 @@ export function createInkwireServer({ root = mkdtempSync(path.join(tmpdir(), "in
     const id = m ? decodeURIComponent(m[1]) : null;
     const text = rawBody.toString("utf8");
     if (url.pathname === "/api/inkwire" && req.method === "GET") out = await handleDiscovery({ ...common, config, store });
-    else if (url.pathname === "/api/content" && req.method === "POST") out = await handleUpsert({ ...common, rawBody: text, store, config });
+    else if (url.pathname === "/api/content" && req.method === "POST") out = await handleUpsert({ ...common, rawBody: text, query: url.searchParams, store, config });
     else if (url.pathname === "/api/content" && req.method === "GET") out = await handleList({ ...common, query: url.searchParams, store, config });
     else if (id && req.method === "GET") out = await handleGet({ ...common, id, store });
     else if (id && req.method === "PATCH")
-      out = await handlePatch({ ...common, id, rawBody: text, ifMatchHeader: req.headers["if-match"], store, config });
+      out = await handlePatch({ ...common, id, rawBody: text, query: url.searchParams, ifMatchHeader: req.headers["if-match"], store, config });
     else if (id && req.method === "DELETE") out = await handleDelete({ ...common, id, ifMatchHeader: req.headers["if-match"], store, config });
     else if (rv && !rv[2] && req.method === "GET" && rv[3] === undefined) out = await handleRevisions({ ...common, id: decodeURIComponent(rv[1]), store });
     else if (rv && rv[3] !== undefined && req.method === "GET") out = await handleRevision({ ...common, id: decodeURIComponent(rv[1]), revision: decodeURIComponent(rv[3]), store });
     else if (rv && rv[2] && req.method === "POST")
       out = await handleRestore({ ...common, id: decodeURIComponent(rv[1]), rawBody: text, ifMatchHeader: req.headers["if-match"], store, config });
+    else if (url.pathname === "/api/redirects" && req.method === "GET") out = await handleRedirect({ ...common, query: url.searchParams, store });
     else if (url.pathname === "/api/terms" && req.method === "GET") out = await handleTerms({ ...common, query: url.searchParams, store });
     else if (url.pathname === "/api/media" && req.method === "GET") out = await handleMediaList({ ...common, query: url.searchParams, store });
     else if (mm && req.method === "PATCH") out = await handleMediaUpdate({ ...common, id: decodeURIComponent(mm[1]), rawBody: text, store });

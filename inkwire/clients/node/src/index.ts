@@ -1,4 +1,4 @@
-// Inkwire client (protocol v1): publish, read, edit, delete, terms, media library, discovery.
+// Inkwire client (protocol v1): publish, read, edit, delete, undo, redirects, terms, media library, discovery.
 
 /** SEO overrides on publish (SPEC "SEO Profile 1"). Only what differs from the derived defaults. */
 export interface SeoPayload {
@@ -23,13 +23,33 @@ export interface PostPayload {
   /** Alt text for the cover image. */
   cover_image_alt?: string;
   canonical_url?: string; seo?: SeoPayload; author?: Author;
+  /** Feature `translations`: the entry's BCP 47 language. */
+  lang?: string;
+  /** Feature `translations`: entries sharing it are translations of each other. */
+  translation_key?: string;
   status?: "draft" | "published"; published_at?: string;
 }
 export type ContentPayload = PostPayload;
 
+/** SEO advice on an entry as written (feature `warnings`); never blocks the write. Unknown codes may appear. */
+export interface Warning {
+  code: "title_duplicate" | "title_long" | "description_missing" | "description_duplicate" | "h1_extra" | "heading_skipped"
+    | "image_alt_missing" | "link_broken" | "link_redirect" | "anchor_generic" | "translation_lang_duplicate" | (string & {});
+  /** The field to change: `title`, `seo.title`, `seo.description`, `markdown`, `cover_image_alt`, `lang`. */
+  field: string;
+  message: string;
+}
+
 export interface PublishResult {
-  id: string; external_id: string; url: string; slug: string; kind: string;
+  /** `null` on the dry run of a create. */
+  id: string | null; external_id: string;
+  /** Absent on a dry run when the receiver cannot tell where the entry would live. */
+  url: string; slug: string; kind: string;
   status: "draft" | "published"; created: boolean;
+  /** Feature `warnings`. */
+  warnings?: Warning[];
+  /** True when nothing was written (`dryRun`). */
+  dry_run?: boolean;
 }
 
 /** A subset of the publish fields (`inkwire-patch.schema.json`). `null` clears an optional field; `external_id` cannot change. */
@@ -46,6 +66,7 @@ export interface PatchPayload {
     og_title?: string; og_description?: string; json_ld?: string | null;
   } | null;
   author?: Author | null;
+  lang?: string | null; translation_key?: string | null;
   status?: "draft" | "published";
   published_at?: string | null;
 }
@@ -53,6 +74,7 @@ export interface PatchPayload {
 export interface ContentSummary {
   id: string; external_id: string | null; kind: string; title: string; slug: string; url: string;
   status: "draft" | "published"; excerpt?: string; tags?: string[]; categories?: string[];
+  lang?: string; translation_key?: string;
   published_at: string; updated_at: string;
 }
 /** The effective SEO values (overrides applied over the derived defaults). */
@@ -67,12 +89,17 @@ export interface EffectiveSeo {
 }
 export interface Content extends ContentSummary {
   markdown: string; cover_image_url?: string; cover_image_alt?: string; canonical_url?: string; author?: Author; seo: EffectiveSeo;
+  /** On the answer to a write (feature `warnings`). */
+  warnings?: Warning[];
+  /** True when nothing was written (`dryRun`). */
+  dry_run?: boolean;
 }
 
 export interface Capabilities {
   /**
    * What the receiver implements. `upsert` is always present. Known: `upsert`, `list`, `get`, `update`,
-   * `delete`, `terms`, `schedule`, `media`, `media_url`, `media_list`, `media_update`, `revisions` (an open set).
+   * `delete`, `terms`, `schedule`, `media`, `media_url`, `media_list`, `media_update`, `revisions`, `warnings`,
+   * `redirects`, `translations` (an open set).
    */
   features: string[];
   /** The kinds the receiver holds; never send others. */
@@ -90,7 +117,10 @@ export interface ListQuery {
   status?: "draft" | "published"; kind?: string; tag?: string;
   /** Entries carrying this one category. */
   category?: string; search?: string;
-  external_id?: string; slug?: string; limit?: number; cursor?: string;
+  external_id?: string; slug?: string;
+  /** Feature `translations`: exact matches. */
+  lang?: string; translation_key?: string;
+  limit?: number; cursor?: string;
 }
 export interface ListResult { items: ContentSummary[]; next_cursor: string | null }
 
@@ -109,6 +139,9 @@ export interface RevisionSummary {
 export interface RevisionsResult { items: RevisionSummary[] }
 export interface Revision extends RevisionSummary { entry: Content }
 
+/** Where an old address leads (feature `redirects`). */
+export interface Redirect { kind: string; slug: string; id: string; url: string; status: "draft" | "published" }
+
 export interface TermsQuery {
   kind?: "tag" | "category";
   /** Case-insensitive substring of the term name. */
@@ -123,6 +156,8 @@ export interface TermsResult { items: Term[] }
 /** An image in the receiver's media library. */
 export interface MediaItem {
   id: string; url: string; alt?: string; title?: string; mime_type: string;
+  /** Pixels. */
+  width?: number; height?: number;
   /** ISO-8601 timestamp. */
   created_at: string;
 }
@@ -159,10 +194,17 @@ export interface RequestOptions {
    */
   fetch?: (url: string, init: RequestInit) => Promise<Response>;
 }
-export type PublishOptions = RequestOptions;
+export interface PublishOptions extends RequestOptions {
+  /** Feature `warnings`: validate and answer as the write would, with its warnings, writing nothing. */
+  dryRun?: boolean;
+}
 export interface WriteOptions extends RequestOptions {
   /** Sent as `If-Match` (use the `etag` from `get`): a changed entry answers 412, surfaced as code `stale`. */
   ifMatch?: string;
+}
+export interface UpdateOptions extends WriteOptions {
+  /** Feature `warnings`: the entry as the edit would make it, with its warnings, writing nothing (`etag` is null). */
+  dryRun?: boolean;
 }
 
 const CODE_BY_STATUS: Record<number, string> = {
@@ -216,7 +258,7 @@ export async function publish(
   baseUrl: string, apiKey: string, payload: PostPayload, opts: PublishOptions = {},
 ): Promise<PublishResult> {
   const res = await call(baseUrl, apiKey, {
-    method: "POST", path: "/api/content",
+    method: "POST", path: `/api/content${opts.dryRun ? "?dry_run=true" : ""}`,
     headers: { ...JSON_HEADERS, "idempotency-key": payload.external_id },
     body: JSON.stringify(payload),
   }, opts);
@@ -245,10 +287,10 @@ export async function get(baseUrl: string, apiKey: string, id: string, opts: Req
 
 /** PATCH /api/content/{id}: change any subset of fields. Returns the full updated entry and its new ETag. */
 export async function update(
-  baseUrl: string, apiKey: string, id: string, patch: PatchPayload, opts: WriteOptions = {},
+  baseUrl: string, apiKey: string, id: string, patch: PatchPayload, opts: UpdateOptions = {},
 ): Promise<ContentWithEtag> {
   const res = await call(baseUrl, apiKey, {
-    method: "PATCH", path: idPath(id),
+    method: "PATCH", path: `${idPath(id)}${opts.dryRun ? "?dry_run=true" : ""}`,
     headers: { ...JSON_HEADERS, ...(opts.ifMatch ? { "if-match": opts.ifMatch } : {}) },
     body: JSON.stringify(patch),
   }, opts);
@@ -289,6 +331,12 @@ export async function restore(
     body: JSON.stringify({ revision: rev }),
   }, opts);
   return { content: await json<Content>(res), etag: res.headers.get("etag") };
+}
+
+/** GET /api/redirects (feature `redirects`): where an old address leads now; null when nothing redirects from it. */
+export async function redirect(baseUrl: string, apiKey: string, kind: string, slug: string, opts: RequestOptions = {}): Promise<Redirect | null> {
+  const res = await call(baseUrl, apiKey, { method: "GET", path: `/api/redirects${queryString({ kind, slug })}`, allow404: true }, opts);
+  return res.status === 404 ? null : json<Redirect>(res);
 }
 
 /** GET /api/terms (feature `terms`): the tags and categories entries use, most used first. */

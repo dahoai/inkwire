@@ -27,7 +27,7 @@ from urllib.parse import unquote
 from typing import Literal, Optional, Protocol, TypedDict, runtime_checkable
 
 from .errors import InkwireError
-from .media import validate_image
+from .media import image_size, validate_image
 
 ContentStatus = Literal["draft", "published"]
 
@@ -130,6 +130,8 @@ class MediaResult:
     title: str | None = None
     mime_type: str = ""
     created_at: str = ""
+    width: int | None = None
+    height: int | None = None
 
     def as_dict(self) -> dict:
         body: dict = {"id": self.id, "url": self.url}
@@ -138,6 +140,8 @@ class MediaResult:
         if self.title is not None:
             body["title"] = self.title
         body["mime_type"] = self.mime_type
+        if self.width and self.height:
+            body["width"], body["height"] = self.width, self.height
         body["created_at"] = self.created_at
         return body
 
@@ -337,12 +341,15 @@ class MemoryStore:
 
     async def media(self, key: str, upload: MediaUpload) -> MediaResult:
         hex_id = secrets.token_hex(8)
+        size = image_size(upload.data, upload.content_type) or (None, None)
         result = MediaResult(
             id=hex_id,
             url=f"{self._media_url_base}/{hex_id}-{safe_filename(upload.filename)}",
             alt=upload.alt,
             mime_type=upload.content_type,
             created_at=now_iso(),
+            width=size[0],
+            height=size[1],
         )
         self._media[hex_id] = upload.data
         self._media_meta[self._k(key, hex_id)] = result

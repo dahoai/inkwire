@@ -53,7 +53,7 @@ Check:
 
 ```bash
 curl -H "Authorization: Bearer <full key>" http://localhost:3000/api/inkwire
-# {"inkwire":1,"site":{...},"features":["upsert","list","get","update","delete","terms","media","media_url","media_list","media_update","revisions"],"kinds":["post","page"],"limits":{...}}
+# {"inkwire":1,"site":{...},"features":["upsert","list","get","update","delete","terms","media","media_url","media_list","media_update","revisions","warnings","redirects","translations"],"kinds":["post","page"],"limits":{...}}
 ```
 
 ## 2. Render what gets published
@@ -67,13 +67,14 @@ Save as `app/blog/[slug]/page.tsx` (or `src/app/...`) and set `INKWIRE_URL_TEMPL
 <!-- inkwire:example inkwire/receivers/nextjs/examples/blog/[slug]/page.tsx -->
 ```tsx
 // Renders a published Inkwire "post" at /blog/<slug> with everything SEO Profile 1 asks of a page:
-// title, description, canonical, Open Graph, Twitter, robots, and BlogPosting JSON-LD.
+// title, description, canonical, Open Graph, Twitter, robots, BlogPosting JSON-LD, hreflang for its
+// translations, and a permanent redirect from the address it had before a slug change.
 // Copy it to app/blog/[slug]/page.tsx (src/app/... if you use src/) and set
 //   INKWIRE_URL_TEMPLATE={site}/blog/{slug}
 // so the addresses the API returns are the ones this page answers on.
 import type { Metadata } from "next";
-import { notFound } from "next/navigation";
-import { effectiveSeo } from "inkwire-receiver-core";
+import { notFound, permanentRedirect } from "next/navigation";
+import { alternates, effectiveSeo, resolveRedirect } from "inkwire-receiver-core";
 import { getInkwire } from "../../api/_inkwire/config";
 
 export const dynamic = "force-dynamic";
@@ -82,20 +83,22 @@ type Props = { params: Promise<{ slug: string }> };
 
 async function load(slug: string) {
   const { store, keys } = getInkwire();
-  const { items } = await store.list(keys[0]?.scope ?? "default", { kind: "post", slug, status: "published", limit: 1 });
-  return items[0] ?? null;
+  const scope = keys[0]?.scope ?? "default";
+  const { items } = await store.list(scope, { kind: "post", slug, status: "published", limit: 1 });
+  return { entry: items[0] ?? null, store, scope };
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const entry = await load((await params).slug);
+  const { entry, store, scope } = await load((await params).slug);
   if (!entry) return {};
   const seo = effectiveSeo(entry);
   const url = entry.canonical_url ?? entry.url;
   const images = seo.image_url ? [seo.image_url] : undefined;
+  const languages = Object.fromEntries((await alternates(store, scope, entry)).map((a) => [a.lang, a.url]));
   return {
     title: seo.title,
     description: seo.description,
-    alternates: { canonical: url },
+    alternates: { canonical: url, languages },
     robots: seo.noindex ? "noindex,follow" : undefined,
     openGraph: { type: "article", title: seo.title, description: seo.description, url, images, publishedTime: entry.published_at },
     twitter: { card: images ? "summary_large_image" : "summary", title: seo.title, description: seo.description, images },
@@ -103,8 +106,14 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 }
 
 export default async function Post({ params }: Props) {
-  const entry = await load((await params).slug);
-  if (!entry) notFound();
+  const { slug } = await params;
+  const { entry, store, scope } = await load(slug);
+  if (!entry) {
+    // An address the entry had before a slug change: one permanent (308) redirect to where it is now.
+    const moved = await resolveRedirect(store, scope, "post", slug);
+    if (moved) permanentRedirect(moved.url);
+    notFound();
+  }
   const seo = effectiveSeo(entry);
   const url = entry.canonical_url ?? entry.url;
   const jsonLd = {
@@ -139,23 +148,38 @@ Save as `blog.mjs` next to `inkwire-router.mjs`, call `mountBlog(app)` after the
 <!-- inkwire:example inkwire/receivers/node-express/examples/blog.mjs -->
 ```js
 // Renders a published Inkwire "post" at /blog/<slug> with everything SEO Profile 1 asks of a page:
-// title, description, canonical, Open Graph, Twitter, robots, and BlogPosting JSON-LD.
+// title, description, canonical, Open Graph, Twitter, robots, BlogPosting JSON-LD, hreflang for its
+// translations, a permanent redirect from the address it had before a slug change, and /sitemap.xml
+// (drop that route if your site has a sitemap: add `sitemapEntries` to yours instead).
 // Copy it next to inkwire-router.mjs, call mountBlog(app) in your app, and set
 //   INKWIRE_URL_TEMPLATE={site}/blog/{slug}
 // so the addresses the API returns are the ones this route answers on.
-import { effectiveSeo } from "inkwire-receiver-core";
+import { alternates, effectiveSeo, resolveRedirect, sitemapEntries } from "inkwire-receiver-core";
 import { buildReceiver } from "./inkwire-router.mjs";
 
 const esc = (s) =>
   String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
 export function mountBlog(app, env = process.env) {
-  const { store, keys } = buildReceiver(env); // a second FileStore over the same folder is fine: it only caches
+  const { store, keys, config } = buildReceiver(env); // a second FileStore over the same folder is fine: it only caches
+  const scope = keys[0]?.scope ?? "default";
+  app.get("/sitemap.xml", async (_req, res, next) => {
+    try {
+      const urls = (await sitemapEntries(store, scope)).map((e) => `<url><loc>${esc(e.url)}</loc><lastmod>${esc(e.lastmod)}</lastmod></url>`);
+      res.type("application/xml").send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.join("")}</urlset>`);
+    } catch (e) {
+      next(e);
+    }
+  });
   app.get("/blog/:slug", async (req, res, next) => {
     try {
-      const { items } = await store.list(keys[0]?.scope ?? "default", { kind: "post", slug: req.params.slug, status: "published", limit: 1 });
+      const { items } = await store.list(scope, { kind: "post", slug: req.params.slug, status: "published", limit: 1 });
       const entry = items[0];
-      if (!entry) return next();
+      if (!entry) {
+        // An address the entry had before a slug change: one permanent redirect to where it is now.
+        const moved = await resolveRedirect(store, scope, "post", req.params.slug);
+        return moved ? res.redirect(301, moved.url) : next();
+      }
       const seo = effectiveSeo(entry);
       const url = entry.canonical_url ?? entry.url;
       const jsonLd = {
@@ -171,11 +195,13 @@ export function mountBlog(app, env = process.env) {
         ...(entry.tags?.length ? { keywords: entry.tags } : {}),
       };
       const meta = (attr, key, value) => `<meta ${attr}="${key}" content="${esc(value)}">`;
+      const hreflang = (await alternates(store, scope, entry)).map((a) => `<link rel="alternate" hreflang="${esc(a.lang)}" href="${esc(a.url)}">`).join("\n");
       res.type("html").send(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<html lang="${esc(entry.lang ?? config.site.language ?? "en")}"><head><meta charset="utf-8">
 <title>${esc(seo.title)}</title>
 ${meta("name", "description", seo.description)}
 <link rel="canonical" href="${esc(url)}">
+${hreflang}
 ${seo.noindex ? meta("name", "robots", "noindex,follow") : ""}
 ${meta("property", "og:type", "article")}
 ${meta("property", "og:title", seo.title)}

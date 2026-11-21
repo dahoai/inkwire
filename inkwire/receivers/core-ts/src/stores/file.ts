@@ -4,8 +4,8 @@ import path from "node:path";
 import { InkwireError } from "../errors.js";
 import { KIND_RE, RESERVED_KINDS, SLUG_FILE_RE, idFor, parseEntryFile, parseId, serializeEntry, updateEntryFile } from "../files.js";
 import { matches, pageMedia, pageOf, recencyKey } from "../list.js";
-import { MEDIA_FILE_RE, MEDIA_ID_RE, META_SUFFIX, type MediaMeta, parseMeta, patchMeta, serializeMeta, toMedia } from "../media-meta.js";
-import type { ContentStore, ListFilter, ListResult, MediaInput, MediaListFilter, MediaListResult, SaveEntry, StoredContent, StoredMedia, StoredRevision } from "../store.js";
+import { MEDIA_FILE_RE, MEDIA_ID_RE, META_SUFFIX, metaFor, metaOf, parseMeta, patchMeta, serializeMeta, toMedia } from "../media-meta.js";
+import type { ContentStore, ListFilter, ListResult, MediaInput, MediaListFilter, MediaListResult, SaveEntry, StoredContent, StoredMedia, StoredRedirect, StoredRevision } from "../store.js";
 
 export interface FileStoreOptions {
   /** The content directory: `<root>/<kind>/<slug>.md`. */
@@ -29,6 +29,7 @@ export class FileStore implements ContentStore {
   private mediaBase: string;
   private urlFor: (e: { kind: string; slug: string }) => string;
   private cache = new Map<string, { sig: string; entry: Omit<StoredContent, "key"> | null }>();
+  readonly translations = true;
 
   constructor(opts: FileStoreOptions) {
     this.root = path.resolve(opts.root);
@@ -183,7 +184,7 @@ export class FileStore implements ContentStore {
     const hex = randomBytes(8).toString("hex");
     const name = `${hex}-${m.filename}`;
     const file = path.join(dir, name);
-    const meta: MediaMeta = { ...(m.alt !== undefined ? { alt: m.alt } : {}), content_type: m.contentType, created_at: new Date().toISOString() };
+    const meta = metaFor(m);
     await this.writeAtomic(file, m.bytes);
     await this.writeAtomic(`${file}${META_SUFFIX}`, serializeMeta(meta));
     return toMedia(hex, `${this.mediaBase}/${name}`, meta);
@@ -217,10 +218,7 @@ export class FileStore implements ContentStore {
     if (!name) return null;
     const cur = await this.readMedia(dir, name);
     if (!cur) return null;
-    const meta = patchMeta(
-      { ...(cur.alt !== undefined ? { alt: cur.alt } : {}), ...(cur.title !== undefined ? { title: cur.title } : {}), content_type: cur.mime_type, created_at: cur.created_at },
-      patch,
-    );
+    const meta = patchMeta(metaOf(cur), patch);
     await this.writeAtomic(path.join(dir, `${name}${META_SUFFIX}`), serializeMeta(meta));
     return toMedia(id, cur.url, meta);
   }
@@ -261,5 +259,38 @@ export class FileStore implements ContentStore {
     await mkdir(path.dirname(to), { recursive: true });
     await this.writeAtomic(to, JSON.stringify([...moved, ...(await this.listRevisions(key, toId))]));
     await unlink(from).catch(() => {});
+  }
+
+  // Redirects: one JSON file, <root>/.redirects.json (hidden like .revisions). ponytail: the whole
+  // list is rewritten on each change; a site with tens of thousands of renames wants a database.
+
+  private get redirectsFile() {
+    return path.join(this.root, ".redirects.json");
+  }
+
+  private async readRedirects(): Promise<StoredRedirect[]> {
+    try {
+      const parsed: unknown = JSON.parse(await readFile(this.redirectsFile, "utf8"));
+      return Array.isArray(parsed) ? (parsed as StoredRedirect[]) : [];
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw e;
+    }
+  }
+
+  async saveRedirect(_key: string, r: StoredRedirect) {
+    const rest = (await this.readRedirects()).filter((x) => x.kind !== r.kind || x.slug !== r.slug);
+    await mkdir(this.root, { recursive: true });
+    await this.writeAtomic(this.redirectsFile, JSON.stringify([...rest, r]));
+  }
+
+  async findRedirect(_key: string, kind: string, slug: string) {
+    return (await this.readRedirects()).find((r) => r.kind === kind && r.slug === slug) ?? null;
+  }
+
+  async moveRedirects(_key: string, fromId: string, toId: string) {
+    const all = await this.readRedirects();
+    if (!all.some((r) => r.id === fromId)) return;
+    await this.writeAtomic(this.redirectsFile, JSON.stringify(all.map((r) => (r.id === fromId ? { ...r, id: toId } : r))));
   }
 }

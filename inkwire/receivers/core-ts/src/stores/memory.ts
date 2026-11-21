@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { matches, pageMedia, pageOf, recencyKey } from "../list.js";
-import { patchMeta, toMedia } from "../media-meta.js";
-import type { ContentStore, ListFilter, ListResult, MediaInput, MediaListFilter, MediaListResult, SaveEntry, StoredContent, StoredMedia, StoredRevision } from "../store.js";
+import { metaFor, metaOf, patchMeta, toMedia } from "../media-meta.js";
+import type { ContentStore, ListFilter, ListResult, MediaInput, MediaListFilter, MediaListResult, SaveEntry, StoredContent, StoredMedia, StoredRedirect, StoredRevision } from "../store.js";
 
 export interface MemoryStoreOptions {
   /** Public address of an entry. Default `https://example.test/<kind>/<slug>`. */
@@ -14,6 +14,8 @@ export class MemoryStore implements ContentStore {
   private entries = new Map<string, Map<string, StoredContent>>();
   private media = new Map<string, Map<string, StoredMedia & { bytes: Buffer; contentType: string }>>();
   private revisions = new Map<string, Map<string, StoredRevision[]>>();
+  private redirects = new Map<string, Map<string, StoredRedirect>>();
+  readonly translations = true;
   constructor(private opts: MemoryStoreOptions = {}) {}
 
   private scope(key: string) {
@@ -51,7 +53,7 @@ export class MemoryStore implements ContentStore {
   async saveMedia(key: string, m: MediaInput): Promise<StoredMedia> {
     const id = randomBytes(8).toString("hex");
     const url = `${this.opts.mediaUrlBase ?? "https://example.test/media"}/${id}-${m.filename}`;
-    const saved = toMedia(id, url, { ...(m.alt !== undefined ? { alt: m.alt } : {}), content_type: m.contentType, created_at: new Date().toISOString() });
+    const saved = toMedia(id, url, metaFor(m));
     let bucket = this.media.get(key);
     if (!bucket) this.media.set(key, (bucket = new Map()));
     bucket.set(id, { ...saved, bytes: m.bytes, contentType: m.contentType });
@@ -66,7 +68,7 @@ export class MemoryStore implements ContentStore {
   async updateMedia(key: string, id: string, patch: { alt?: string | null; title?: string | null }): Promise<StoredMedia | null> {
     const cur = this.media.get(key)?.get(id);
     if (!cur) return null;
-    const meta = patchMeta({ ...(cur.alt !== undefined ? { alt: cur.alt } : {}), ...(cur.title !== undefined ? { title: cur.title } : {}), content_type: cur.mime_type, created_at: cur.created_at }, patch);
+    const meta = patchMeta(metaOf(cur), patch);
     const { bytes, contentType } = cur;
     const next = { ...toMedia(id, cur.url, meta), bytes, contentType };
     this.media.get(key)!.set(id, next);
@@ -95,5 +97,24 @@ export class MemoryStore implements ContentStore {
     if (!moved) return;
     h.set(toId, [...moved, ...(h.get(toId) ?? [])]);
     h.delete(fromId);
+  }
+
+  private moves(key: string) {
+    let m = this.redirects.get(key);
+    if (!m) this.redirects.set(key, (m = new Map()));
+    return m;
+  }
+
+  async saveRedirect(key: string, r: StoredRedirect) {
+    this.moves(key).set(`${r.kind}/${r.slug}`, { ...r });
+  }
+
+  async findRedirect(key: string, kind: string, slug: string) {
+    const r = this.moves(key).get(`${kind}/${slug}`);
+    return r ? { ...r } : null;
+  }
+
+  async moveRedirects(key: string, fromId: string, toId: string) {
+    for (const r of this.moves(key).values()) if (r.id === fromId) r.id = toId;
   }
 }

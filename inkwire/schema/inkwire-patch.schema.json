@@ -123,6 +123,24 @@
         }
       }
     },
+    "lang": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 35,
+      "pattern": "^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*$",
+      "description": "Feature `translations`: BCP 47 language of the entry."
+    },
+    "translation_key": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "maxLength": 255,
+      "description": "Feature `translations`: entries sharing it are translations of each other."
+    },
     "status": {
       "type": "string",
       "enum": [

@@ -112,6 +112,9 @@ function check(c, { res, json, etag }) {
     else if (want === "absent" && got !== undefined && got !== null) problems.push(`${p} present`);
     else if (want !== "present" && want !== "absent" && got !== want) problems.push(`${p} ${JSON.stringify(got)}!=${JSON.stringify(want)}`);
   }
+  for (const code of e.warningCodes ?? []) {
+    if (!(Array.isArray(json?.warnings) && json.warnings.some((w) => w?.code === code))) problems.push(`no ${code} warning`);
+  }
   if (e.hasUrl && !json?.url) problems.push("no url");
   if (e.hasSlug && !json?.slug) problems.push("no slug");
   if (e.hasEtag && !etag) problems.push("no ETag header");

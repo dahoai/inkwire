@@ -58,6 +58,8 @@ export function serializeEntry(e: Draft): string {
     canonical_url: e.canonical_url,
     seo: e.seo && Object.keys(e.seo).length ? e.seo : undefined,
     author: e.author,
+    lang: e.lang,
+    translation_key: e.translation_key,
     published_at: e.published_at,
     updated_at: e.updated_at,
     version: e.version,
@@ -127,6 +129,9 @@ export function parseEntryFile(
   const cover = httpOnly(fm.cover_image_url);
   const coverAlt = str(fm.cover_image_alt);
   const canonical = httpOnly(fm.canonical_url);
+  const lang = str(fm.lang);
+  // Hugo spells it translationKey.
+  const translationKey = str(fm.translation_key) ?? str(fm.translationKey);
 
   return {
     external_id: str(fm.external_id) ?? null,
@@ -143,6 +148,8 @@ export function parseEntryFile(
     ...(canonical ? { canonical_url: canonical } : {}),
     seo: Object.keys(seo).length ? seo : null,
     ...(author && Object.keys(author).length ? { author } : {}),
+    ...(lang && /^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*$/.test(lang) ? { lang } : {}),
+    ...(translationKey ? { translation_key: translationKey.slice(0, 255) } : {}),
     // Hugo, Astro and Jekyll mark drafts with `draft: true` or `published: false`.
     status: fm.status === "draft" || fm.draft === true || fm.published === false ? "draft" : "published",
     published_at: iso(fm.published_at) ?? iso(fm.date) ?? iso(fm.pubDate) ?? where.mtimeIso,
@@ -157,6 +164,7 @@ const ALIASES = {
   categories: ["categories", "category"],
   published_at: ["published_at", "date", "pubDate"],
   updated_at: ["updated_at", "lastmod"],
+  translation_key: ["translation_key", "translationKey"],
 } as const;
 
 /**
@@ -186,10 +194,10 @@ export function updateEntryFile(previousRaw: string, before: Draft, after: Draft
     if (own.length === 0) own.push("status");
     for (const k of own) doc.set(k, k === "draft" ? draft : k === "published" ? !draft : after.status);
   }
-  for (const k of ["tags", "cover_image_url", "cover_image_alt", "canonical_url", "author", "version"] as const) {
+  for (const k of ["tags", "cover_image_url", "cover_image_alt", "canonical_url", "author", "lang", "version"] as const) {
     if (changed(k)) put(k, after[k]);
   }
-  for (const k of ["excerpt", "categories", "published_at", "updated_at"] as const) {
+  for (const k of ["excerpt", "categories", "published_at", "updated_at", "translation_key"] as const) {
     if (changed(k)) put(k, after[k], ALIASES[k]);
   }
   if (changed("seo")) put("seo", after.seo && Object.keys(after.seo).length ? after.seo : undefined);

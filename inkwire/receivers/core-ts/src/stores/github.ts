@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { InkwireError } from "../errors.js";
 import { KIND_RE, RESERVED_KINDS, SLUG_FILE_RE, idFor, parseEntryFile, parseId, serializeEntry, updateEntryFile } from "../files.js";
 import { matches, pageMedia, pageOf, recencyKey } from "../list.js";
-import { MEDIA_FILE_RE, MEDIA_ID_RE, META_SUFFIX, type MediaMeta, parseMeta, patchMeta, serializeMeta, toMedia } from "../media-meta.js";
+import { MEDIA_FILE_RE, MEDIA_ID_RE, META_SUFFIX, type MediaMeta, metaFor, parseMeta, patchMeta, serializeMeta, toMedia } from "../media-meta.js";
 import type { ContentStore, ListFilter, ListResult, MediaInput, MediaListFilter, MediaListResult, SaveEntry, StoredContent, StoredMedia } from "../store.js";
 
 export interface GitHubStoreOptions {
@@ -41,6 +41,7 @@ const encodePath = (p: string) => p.split("/").map(encodeURIComponent).join("/")
  * (the tree) and a cold one reads each candidate file once.
  */
 export class GitHubStore implements ContentStore {
+  readonly translations = true;
   private o: GitHubStoreOptions;
   private dir: string;
   private mediaBase: string;
@@ -270,7 +271,7 @@ export class GitHubStore implements ContentStore {
   async saveMedia(_key: string, m: MediaInput): Promise<StoredMedia> {
     const hex = randomBytes(8).toString("hex");
     const name = `${hex}-${m.filename}`;
-    const meta: MediaMeta = { ...(m.alt !== undefined ? { alt: m.alt } : {}), content_type: m.contentType, created_at: new Date().toISOString() };
+    const meta = metaFor(m);
     await this.putFile(`${this.prefix()}media/${name}`, m.bytes, `inkwire: add media ${name}`);
     await this.putFile(`${this.prefix()}media/${name}${META_SUFFIX}`, serializeMeta(meta), `inkwire: describe media ${name}`);
     return toMedia(hex, `${this.mediaBase}/${name}`, meta);

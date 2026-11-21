@@ -45,6 +45,8 @@ Idempotency-Key: gen-2026-07-22-abc        # optional; defaults to external_id
     "json_ld": "{\"@context\":\"https://schema.org\",\"@type\":\"FAQPage\"}"
   },
   "author": { "name": "Isaac", "email": "i@x.com" }, // optional.
+  "lang": "en",                           // optional, feature `translations`. BCP 47.
+  "translation_key": "pricing",           // optional, feature `translations`. Same key = translations of one page.
   "status": "published",                  // "published" | "draft". Default "draft".
   "published_at": "2026-07-22T04:00:00Z"  // optional ISO-8601. Default now(). In the future = scheduled.
 }
@@ -60,11 +62,13 @@ Idempotency-Key: gen-2026-07-22-abc        # optional; defaults to external_id
   "slug": "cut-audit-time",
   "kind": "post",
   "status": "published",
-  "created": true
+  "created": true,
+  "warnings": []
 }
 ```
 
 `created: false` means an existing entry (same `external_id`, same `kind`) was updated.
+`warnings` is present on a receiver with the `warnings` feature (see Warnings and dry runs).
 
 Response header: `Inkwire-Version: 1`.
 
@@ -142,6 +146,23 @@ caller-controlled text cannot terminate its `<script>` element. Additional
 site-wide metadata is allowed. Draft entries remain non-public under the base
 protocol and cannot claim rendering conformance.
 
+A site that claims rendering conformance and advertises these features also:
+
+- **`redirects`**: answers an entry's old address with **one** permanent redirect (`301` or `308`)
+  to its current URL, while the entry is public and no other entry lives at that address (see
+  Redirects). The reference core's `resolveRedirect(store, scope, kind, slug)` does the lookup.
+- **`translations`**: gives a public entry that has public translations one
+  `<link rel="alternate" hreflang="<lang>" href="<url>">` per language, **itself included**,
+  each `href` the translation's canonical URL (`alternates(store, scope, entry)` in the core).
+  The page's `<html lang>` should be the entry's `lang`, else `site.language`.
+
+A site may additionally claim **sitemap conformance**: its `/sitemap.xml` (or a sitemap index
+there, one level deep) lists every entry that is public now (`published`, `published_at` not in
+the future), indexable (effective `noindex` false) and its own canonical (`canonical_url` absent
+or equal to its URL), at its URL, with `<lastmod>` = `updated_at`; and lists no other entry.
+The core's `sitemapEntries(store, scope)` returns exactly that list to merge into the site's
+own sitemap. `inkwire-conformance --seo --sitemap` checks it.
+
 ### Discovery: `GET /api/inkwire`
 
 One unauthenticated-light request that tells a publisher what this receiver can do. Same bearer
@@ -151,7 +172,7 @@ auth as everything else.
 {
   "inkwire": 1,
   "site": { "name": "Acme", "url": "https://acme.com", "description": "Acme's blog", "language": "en" },
-  "features": ["upsert", "list", "get", "update", "delete", "terms", "schedule", "media", "media_url", "media_list", "media_update", "revisions"],
+  "features": ["upsert", "list", "get", "update", "delete", "terms", "schedule", "media", "media_url", "media_list", "media_update", "revisions", "warnings", "redirects", "translations"],
   "kinds": ["post", "page"],
   "limits": { "markdown_bytes": 1000000, "media_bytes": 10000000, "revisions": 50 }
 }
@@ -163,7 +184,7 @@ other kinds). `limits` are ceilings in bytes (a request over one answers `413 to
 
 ### Reading: `GET /api/content`, `GET /api/content/{id}`  (features `list`, `get`)
 
-`GET /api/content?status=&kind=&tag=&category=&search=&external_id=&slug=&limit=&cursor=` returns
+`GET /api/content?status=&kind=&tag=&category=&search=&external_id=&slug=&lang=&translation_key=&limit=&cursor=` returns
 
 ```json
 { "items": [ ContentSummary ], "next_cursor": "opaque-or-null" }
@@ -171,10 +192,11 @@ other kinds). `limits` are ceilings in bytes (a request over one answers `413 to
 
 Entries come **newest first**: by `updated_at` descending, ties broken by `id`. `limit` defaults to 20, at most 100. `cursor` is opaque: pass back `next_cursor` to get the next
 page. `search` matches title, excerpt and markdown, case-insensitively. `tag` matches one tag, `category` one category.
+`lang` and `translation_key` (feature `translations`) match exactly; a receiver without the feature answers `400`.
 Drafts are listed to a caller who holds a key. `GET /api/content/{id}` returns the full entry.
 
 `ContentSummary`: `id`, `external_id` (or `null`), `kind`, `title`, `slug`, `url`, `status`,
-`excerpt`, `tags`, `categories`, `published_at`, `updated_at`. The full entry adds `markdown`,
+`excerpt`, `tags`, `categories`, `lang`, `translation_key`, `published_at`, `updated_at`. The full entry adds `markdown`,
 `cover_image_url`, `cover_image_alt`, `canonical_url`, `author`, and `seo`, which holds the
 **effective** values (the overrides applied over the derived defaults from SEO Profile 1:
 `title`, `description`, `image_url`, `noindex`, `og_title`, `og_description`, `json_ld`). Every single-entry response carries an `ETag` header — opaque, changes
@@ -187,10 +209,10 @@ site auditable on day one.
 ### Editing: `PATCH /api/content/{id}`  (feature `update`)
 
 Body: any subset of the publish fields (`title`, `kind`, `markdown`, `slug`, `excerpt`, `tags`,
-`categories`, `cover_image_url`, `cover_image_alt`, `canonical_url`, `seo`, `author`, `status`,
-`published_at`). Given fields replace the stored value; omitted fields keep theirs; `null`
+`categories`, `cover_image_url`, `cover_image_alt`, `canonical_url`, `seo`, `author`, `lang`,
+`translation_key`, `status`, `published_at`). Given fields replace the stored value; omitted fields keep theirs; `null`
 clears an optional field (`excerpt`, `tags`, `categories`, `cover_image_url`, `cover_image_alt`,
-`canonical_url`, `seo`, `author`, `published_at`).
+`canonical_url`, `seo`, `author`, `lang`, `translation_key`, `published_at`).
 `seo` present as an object is merged per key. `external_id` cannot be changed (a body that
 carries it is `400 invalid_payload`). A `kind` change is allowed when the receiver holds the
 target kind; slug rules then apply in the target kind. A new `slug` follows the publish rules
@@ -204,7 +226,7 @@ Text edits are computed by the client: fetch the entry, replace the exact passag
 (the SDKs have an `edits` helper that requires each `find` to match exactly once), `PATCH` the
 whole `markdown` with `If-Match`. The receiver never has to merge text.
 
-The response is the full updated entry with its new `ETag`.
+The response is the full updated entry with its new `ETag` (and `warnings`, with that feature).
 
 ### Deleting: `DELETE /api/content/{id}`  (feature `delete`)
 
@@ -232,8 +254,14 @@ accepts JSON `{ "url": "https://...", "alt": "..." }` for it to fetch (SSRF-guar
 without `media_url` that form answers `400 invalid_payload`. Response:
 
 ```json
-{ "id": "...", "url": "https://site/uploads/x.jpg", "alt": "...", "mime_type": "image/jpeg", "created_at": "2026-07-22T04:00:00.000Z" }
+{ "id": "...", "url": "https://site/uploads/x.jpg", "alt": "...", "mime_type": "image/jpeg", "width": 1200, "height": 630, "created_at": "2026-07-22T04:00:00.000Z" }
 ```
+
+`width` and `height` are the image's size in pixels, read from the file's header; a receiver
+reports them for every upload it can read them from (every accepted format carries them). Media
+items in the library carry them too. A receiver gives each markdown image whose `src` is a media
+item of its library `width` and `height` attributes in the rendered HTML, so the page does not
+shift while it loads.
 
 Use `url` in markdown or as `cover_image_url`. Only images (`jpeg`, `png`, `gif`, `webp`,
 `avif`; never SVG) up to `limits.media_bytes` (over it: `413 too_large`). A site with nowhere to store files omits the
@@ -245,7 +273,7 @@ feature: `cover_image_url` and markdown images keep working with any public URL.
 ties by `id`), with the same `limit` and `cursor` rules as content:
 
 ```json
-{ "items": [ { "id": "...", "url": "...", "alt": "...", "title": "...", "mime_type": "image/png", "created_at": "..." } ], "next_cursor": null }
+{ "items": [ { "id": "...", "url": "...", "alt": "...", "title": "...", "mime_type": "image/png", "width": 800, "height": 600, "created_at": "..." } ], "next_cursor": null }
 ```
 
 `search` matches the alt text, title and filename. `PATCH /api/media/{id}` takes `{ "alt"?: string | null, "title"?: string | null }`
@@ -280,6 +308,69 @@ the entry). It honours `If-Match` against the current entry, refuses a version w
 receiver no longer holds (`400`), and answers `409 conflict` when another entry has since taken its
 `slug` or `external_id`. A read-only key may list and read revisions, never restore. The response
 is the full entry with its new `ETag`.
+
+### Warnings and dry runs  (feature `warnings`)
+
+Every answer to `POST /api/content`, `PATCH /api/content/{id}` and a restore carries `warnings`:
+SEO advice on the entry as it now is, `[]` when there is none. **Warnings never block a write.**
+
+```json
+{ "warnings": [ { "code": "title_duplicate", "field": "title", "message": "\"Pricing\" (142) has the same search title; give each page its own" } ] }
+```
+
+`field` names what to change. `code` is stable; a receiver may add codes and clients ignore the ones
+they do not know. Comparisons are with the site's other entries (published ones for duplicates):
+
+| `code` | When |
+| --- | --- |
+| `title_duplicate` | Another published, indexable entry has the same effective title (case and spaces ignored; translations of each other excepted). |
+| `title_long` | The effective title is over 65 characters. |
+| `description_missing` | No `excerpt` and no `seo.description`: the description falls back to the title. |
+| `description_duplicate` | Another published, indexable entry has the same effective description. |
+| `h1_extra` | The body has a level-1 heading; the page already shows the title as its H1. |
+| `heading_skipped` | A heading skips a level (the body starts at level 2). |
+| `image_alt_missing` | A markdown image has no alt text, or `cover_image_url` has no `cover_image_alt`. |
+| `link_broken` | A link to the site points at an entry address with no public entry (none, or a draft). |
+| `link_redirect` | A link points at an old address that redirects (feature `redirects`); link to the current URL. |
+| `anchor_generic` | Link text that says nothing about its target ("click here", "read more", "en savoir plus"…). |
+| `translation_lang_duplicate` | Another entry with the same `translation_key` has the same `lang`. |
+
+The title and description checks skip an entry whose effective `noindex` is true. Links to other
+pages of the site (not entry addresses) and to other sites are not judged.
+
+**Dry runs.** `POST /api/content?dry_run=true` and `PATCH /api/content/{id}?dry_run=true` do
+everything the write would (validation, limits, kinds, slug conflicts, `If-Match`) and answer what
+it would answer, with `"dry_run": true` and `warnings`, but write nothing: no entry, no revision, no
+redirect, no `ETag` header. A create's `id` is `null`; `url` is where the entry would live when the
+receiver can tell. A read-only key may dry-run (it writes nothing). This is how an agent shows a
+before and after, with the site's own validation and advice, before asking to apply it.
+
+### Redirects  (feature `redirects`)
+
+A write that changes an entry's address (a new `slug` or `kind`, by `PATCH`, upsert or restore)
+keeps the old one. The site answers it with one permanent redirect to the entry's current URL (see
+SEO Profile 1), so search rankings and links survive a rename. An old address follows the entry
+through later moves, stops working when the entry is deleted (and works again if it is restored),
+and yields to any entry that comes to live at it.
+
+`GET /api/redirects?kind=post&slug=old-slug` (`kind` defaults to `post`) says where an old address
+leads:
+
+```json
+{ "kind": "post", "slug": "old-slug", "id": "142", "url": "https://site/blog/new-slug", "status": "published" }
+```
+
+`404 not_found` when nothing redirects from it, when an entry lives there, or when the entry it led
+to was deleted.
+
+### Translations  (feature `translations`)
+
+`lang` (a BCP 47 tag, at most 35 characters, e.g. `en`, `fr-CA`) is the entry's language;
+`site.language` is the default. Entries that share a `translation_key` (any string, 1 to 255
+characters, chosen by the caller) are translations of one another: the site links them with
+`hreflang` (see SEO Profile 1). Each language should appear once per key (a second one is the
+`translation_lang_duplicate` warning; pages use the newest). A receiver whose storage does not keep
+these fields omits the feature and treats them as unknown fields (`400`).
 
 
 ### Errors
@@ -346,7 +437,8 @@ u, ul, var, wbr
 ```
 
 Only two tags keep any attributes; every other tag is stripped of all
-attributes:
+attributes (after sanitizing, a receiver may add numeric `width` and `height` to an `img` whose
+`src` is one of its media items, see Media):
 
 | Tag | Allowed attributes |
 | --- | --- |

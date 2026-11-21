@@ -5,6 +5,7 @@ import {
   MemoryStore,
   handleDelete,
   handleGet,
+  handleRedirect,
   handleList,
   handleMedia,
   handleMediaList,
@@ -41,13 +42,14 @@ export const config: InkwireConfig = {
 };
 
 export function env(store: ContentStore = new MemoryStore()) {
-  const upsert = (body: unknown, auth: string | null = FULL) =>
-    handleUpsert({ authHeader: auth ?? undefined, rawBody: typeof body === "string" ? body : JSON.stringify(body), keys, store, config });
+  const upsert = (body: unknown, auth: string | null = FULL, qs = "") =>
+    handleUpsert({ authHeader: auth ?? undefined, rawBody: typeof body === "string" ? body : JSON.stringify(body), query: new URLSearchParams(qs), keys, store, config });
   const list = (qs = "", auth: string | null = FULL) =>
     handleList({ authHeader: auth ?? undefined, query: new URLSearchParams(qs), keys, store, config });
   const get = (id: string, auth: string | null = FULL) => handleGet({ authHeader: auth ?? undefined, id, keys, store });
-  const patch = (id: string, body: unknown, ifMatch?: string, auth: string | null = FULL) =>
-    handlePatch({ authHeader: auth ?? undefined, id, rawBody: JSON.stringify(body), ifMatchHeader: ifMatch, keys, store, config });
+  const patch = (id: string, body: unknown, ifMatch?: string, auth: string | null = FULL, qs = "") =>
+    handlePatch({ authHeader: auth ?? undefined, id, rawBody: JSON.stringify(body), query: new URLSearchParams(qs), ifMatchHeader: ifMatch, keys, store, config });
+  const redirect = (qs: string, auth: string | null = FULL) => handleRedirect({ authHeader: auth ?? undefined, query: new URLSearchParams(qs), keys, store });
   const del = (id: string, ifMatch?: string, auth: string | null = FULL) =>
     handleDelete({ authHeader: auth ?? undefined, id, ifMatchHeader: ifMatch, keys, store });
   const media = (contentType: string | undefined, rawBody: Buffer | string, auth: string | null = FULL) =>
@@ -60,7 +62,7 @@ export function env(store: ContentStore = new MemoryStore()) {
   const revision = (id: string, rev: string, auth: string | null = FULL) => handleRevision({ authHeader: auth ?? undefined, id, revision: rev, keys, store });
   const restore = (id: string, body: unknown, ifMatch?: string, auth: string | null = FULL) =>
     handleRestore({ authHeader: auth ?? undefined, id, rawBody: JSON.stringify(body), ifMatchHeader: ifMatch, keys, store, config });
-  return { store, upsert, list, get, patch, del, media, terms, mediaList, mediaUpdate, revisions, revision, restore };
+  return { store, upsert, list, get, patch, del, media, terms, mediaList, mediaUpdate, revisions, revision, restore, redirect };
 }
 
 export const post = (n: number | string, extra: Record<string, unknown> = {}) => ({

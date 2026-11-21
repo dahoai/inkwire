@@ -125,6 +125,28 @@ describe("inkwire-mcp against a full receiver", () => {
     assert.match(res.body, /does not schedule/);
   });
 
+  test("SEO: previews and writes carry the site's warnings; a slug change redirects; languages link", async () => {
+    const one = await call(client, "create", { title: "Same title", excerpt: "One", markdown: "## A\n\ntext", status: "published" });
+    const check = await call(client, "create", { title: "Same title", excerpt: "Two", markdown: "![](https://example.com/x.png)", dry_run: true });
+    assert.equal(check.error, false, check.body);
+    assert.equal(check.json.dry_run, true);
+    assert.deepEqual(check.json.warnings.map((w) => w.code).sort(), ["image_alt_missing", "title_duplicate"]);
+    assert.equal((await call(client, "list", { search: "Two" })).json.items.length, 0, "a create dry run writes nothing");
+
+    const two = await call(client, "create", { title: "Other title", excerpt: "Two", markdown: "## B", status: "published" });
+    const preview = await call(client, "update", { id: two.json.id, title: "Same title", slug: "renamed", dry_run: true });
+    assert.deepEqual(preview.json.warnings.map((w) => w.code), ["title_duplicate"], "the site's own check, before writing");
+    assert.match(preview.json.redirect, /will redirect/);
+    const moved = await call(client, "update", { id: two.json.id, slug: "renamed" });
+    assert.match(moved.json.redirect, new RegExp(two.json.url));
+
+    const fr = await call(client, "create", { title: "Même titre", excerpt: "Un", markdown: "## A", lang: "fr", translation_key: "same" });
+    await call(client, "update", { id: one.json.id, lang: "en", translation_key: "same" });
+    const versions = await call(client, "list", { translation_key: "same" });
+    assert.deepEqual(versions.json.items.map((i) => i.lang).sort(), ["en", "fr"]);
+    for (const id of [one.json.id, moved.json.id, fr.json.id]) await call(client, "delete", { id });
+  });
+
   test("images: upload a local file, list it, set its alt text", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "inkwire-mcp-"));
     const file = path.join(dir, "dot.png");
@@ -132,6 +154,7 @@ describe("inkwire-mcp against a full receiver", () => {
     const up = await call(client, "upload_image", { file, alt: "A white dot" });
     assert.equal(up.error, false, up.body);
     assert.equal(up.json.mime_type, "image/png");
+    assert.deepEqual([up.json.width, up.json.height], [1, 1]);
     const listed = await call(client, "list_images", {});
     assert.ok(listed.json.items.some((m) => m.id === up.json.id));
     const changed = await call(client, "update_image", { id: up.json.id, alt: "A single white pixel" });

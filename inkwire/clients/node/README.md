@@ -38,19 +38,20 @@ const library = await listMedia(site, key, { search: "pic", limit: 20 }); // { i
 await updateMedia(site, key, m.id, { alt: "A better description", title: null }); // null clears; returns the MediaItem
 ```
 
-Features a receiver can advertise in `capabilities().features`: `upsert` (always), `list`, `get`, `update`, `delete`, `terms`, `schedule`, `media`, `media_list`, `media_update`. Call only what it lists.
+Features a receiver can advertise in `capabilities().features`: `upsert` (always), `list`, `get`, `update`, `delete`, `terms`, `schedule`, `media`, `media_url`, `media_list`, `media_update`, `revisions`, `warnings`, `redirects`, `translations`. Call only what it lists.
 
 | Function | Endpoint |
 | --- | --- |
-| `publish(baseUrl, apiKey, payload, opts?)` | `POST /api/content` (upsert on `external_id` + `kind`) |
+| `publish(baseUrl, apiKey, payload, opts?)` | `POST /api/content` (upsert on `external_id` + `kind`); `opts.dryRun` writes nothing; `warnings` on the answer |
 | `capabilities(baseUrl, apiKey, opts?)` | `GET /api/inkwire` |
 | `list(baseUrl, apiKey, query?, opts?)` | `GET /api/content` |
 | `get(baseUrl, apiKey, id, opts?)` | `GET /api/content/{id}` -> `{ content, etag }` |
-| `update(baseUrl, apiKey, id, patch, opts?)` | `PATCH /api/content/{id}` -> `{ content, etag }` |
+| `update(baseUrl, apiKey, id, patch, opts?)` | `PATCH /api/content/{id}` -> `{ content, etag }`; `opts.dryRun` writes nothing (`etag` null) |
 | `remove(baseUrl, apiKey, id, opts?)` | `DELETE /api/content/{id}` |
 | `revisions(baseUrl, apiKey, id, opts?)` | `GET /api/content/{id}/revisions` -> `{ items }`, newest first |
 | `revision(baseUrl, apiKey, id, rev, opts?)` | `GET /api/content/{id}/revisions/{rev}` -> the summary + `entry` |
 | `restore(baseUrl, apiKey, id, rev, opts?)` | `POST /api/content/{id}/restore` -> `{ content, etag }` (undo; also undeletes) |
+| `redirect(baseUrl, apiKey, kind, slug, opts?)` | `GET /api/redirects` -> `{ kind, slug, id, url, status }` or `null` |
 | `terms(baseUrl, apiKey, query?, opts?)` | `GET /api/terms` -> `{ items: { kind, name, slug, count }[] }` |
 | `uploadMedia(baseUrl, apiKey, media, opts?)` | `POST /api/media` -> `MediaItem` |
 | `listMedia(baseUrl, apiKey, query?, opts?)` | `GET /api/media` -> `{ items, next_cursor }` |

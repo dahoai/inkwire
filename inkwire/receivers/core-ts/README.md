@@ -24,21 +24,24 @@ res.writeHead(r.status, r.headers).end(JSON.stringify(r.body));
 
 | Endpoint | Handler | Arguments (besides `authHeader`, `keys`) |
 | --- | --- | --- |
-| `POST /api/content` | `handleUpsert` | `rawBody`, `store`, `config` |
+| `POST /api/content` | `handleUpsert` | `rawBody`, `query` (for `dry_run`), `store`, `config` |
 | `GET /api/content` | `handleList` | `query: URLSearchParams`, `store` |
 | `GET /api/content/{id}` | `handleGet` | `id`, `store` |
-| `PATCH /api/content/{id}` | `handlePatch` | `id`, `rawBody`, `ifMatchHeader`, `store`, `config` |
+| `PATCH /api/content/{id}` | `handlePatch` | `id`, `rawBody`, `query` (for `dry_run`), `ifMatchHeader`, `store`, `config` |
 | `DELETE /api/content/{id}` | `handleDelete` | `id`, `ifMatchHeader`, `store`, `config` |
 | `GET /api/content/{id}/revisions` | `handleRevisions` | `id`, `store` |
 | `GET /api/content/{id}/revisions/{revision}` | `handleRevision` | `id`, `revision`, `store` |
 | `POST /api/content/{id}/restore` | `handleRestore` | `id`, `rawBody`, `ifMatchHeader`, `store`, `config` |
+| `GET /api/redirects` | `handleRedirect` | `query`, `store` |
 | `GET /api/terms` | `handleTerms` | `query`, `store` |
 | `POST /api/media` | `handleMedia` | `contentType`, `rawBody` (Buffer), `store`, `config` |
 | `GET /api/media` | `handleMediaList` | `query`, `store` |
 | `PATCH /api/media/{id}` | `handleMediaUpdate` | `id`, `rawBody`, `store` |
 | `GET /api/inkwire` | `handleDiscovery` (or `discoveryBody(config, store)`) | `config`, `store` |
 
-Pass the request's `If-Match` header through as `ifMatchHeader`; the core puts a quoted `ETag` on every single-entry response (and on the upsert response). Discovery advertises what is true: the media features follow the store (`media` needs `saveMedia`, `media_list` needs `listMedia`, `media_update` needs `updateMedia`, `media_url` also needs `config.fetchMedia`), `revisions` needs the three revision methods, `schedule` follows `config.schedule`, and `terms` is always there (terms are derived from the entries, by paging `list`).
+Pass the request's `If-Match` header through as `ifMatchHeader`; the core puts a quoted `ETag` on every single-entry response (and on the upsert response). Discovery advertises what is true: the media features follow the store (`media` needs `saveMedia`, `media_list` needs `listMedia`, `media_update` needs `updateMedia`, `media_url` also needs `config.fetchMedia`), `revisions` needs the three revision methods, `redirects` the three redirect methods, `translations` a store with `translations: true`, `schedule` follows `config.schedule`, and `terms` and `warnings` are always there (both are derived from the entries, by paging `list`).
+
+For the site's own pages: `effectiveSeo(entry)` (the tags), `resolveRedirect(store, scope, kind, slug)` (an old address: answer `301`/`308` to its `url`), `alternates(store, scope, entry)` (the `hreflang` links) and `sitemapEntries(store, scope)` (what the sitemap lists). The examples in `INSTALL.md` use all four.
 
 ## Keys
 
@@ -60,10 +63,16 @@ interface ContentStore {
   saveRevision?(key, id, revision: StoredRevision, keep): Promise<void>; // add one, keep the newest `keep`
   listRevisions?(key, id): Promise<StoredRevision[]>;                     // newest first; survives a remove
   moveRevisions?(key, fromId, toId): Promise<void>;                       // the id followed a slug/kind change
+  saveRedirect?(key, { kind, slug, id, created_at }): Promise<void>;     // an old address; replaces one from the same kind + slug
+  findRedirect?(key, kind, slug): Promise<StoredRedirect | null>;
+  moveRedirects?(key, fromId, toId): Promise<void>;                      // redirects to fromId now lead to toId
+  readonly translations?: boolean;                                        // keeps lang + translation_key, filters list by them
 }
 ```
 
 The three revision methods go together (any missing = no `revisions` feature). The handlers call them: every update, restore and delete first saves the entry it replaces, so a store only keeps a list per entry id (`MemoryStore` in memory, `FileStore` as `<root>/.revisions/<id>.json`). `limits.revisions` in the config sets how many each entry keeps (default 50). `GitHubStore` has none yet: a repo has its own history.
+
+The redirect methods go together too: the handlers save one whenever a write changes an entry's kind or slug (`MemoryStore` in memory, `FileStore` in `<root>/.redirects.json`; `GitHubStore` has none). A store sets `translations: true` only if it keeps `lang` and `translation_key` and filters `list` by them (all three bundled stores do); without it the core refuses those fields. Media items carry `width` and `height` from the upload: keep them. `runStoreContract` (`inkwire-receiver-core/testing`) checks all of this for your own store.
 
 The core finds an entry by `external_id`, and checks slug conflicts, with `list(key, { kind, external_id | slug, limit: 1 })`: make those filters cheap. `etag` is any opaque string that changes whenever the entry does. Handlers serialise writes per scope inside one process (`withLock`); a store shared by several processes needs its own conditional write.
 

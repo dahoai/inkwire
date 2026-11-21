@@ -12,6 +12,7 @@ export {
   handleRevisions,
   handleRevision,
   handleRestore,
+  handleRedirect,
   discoveryBody,
   INKWIRE_VERSION,
 } from "./handle.js";
@@ -32,15 +33,19 @@ export type {
   RevisionsArgs,
   RevisionArgs,
   RestoreArgs,
+  RedirectArgs,
 } from "./handle.js";
 export { parseApiKeys, authorize, requireWrite, DEFAULT_SCOPE } from "./auth.js";
 export type { ApiKey } from "./auth.js";
 export { InkwireError } from "./errors.js";
 export type { InkwireCode } from "./errors.js";
-export { renderMarkdown, slugify, edits, ALLOWED_TAGS, ALLOWED_ATTRIBUTES, ALLOWED_SCHEMES } from "./render.js";
+export { renderMarkdown, sizeImages, slugify, edits, ALLOWED_TAGS, ALLOWED_ATTRIBUTES, ALLOWED_SCHEMES } from "./render.js";
 export { ContentInput, PatchSchema, MediaPatchSchema, RestoreInput } from "./schema.js";
-export { sniffImage, assertImage, parseMultipart, safeFilename } from "./media.js";
+export { sniffImage, imageSize, assertImage, parseMultipart, safeFilename } from "./media.js";
 export { effectiveSeo } from "./seo.js";
+export { seoWarnings, TITLE_MAX } from "./warnings.js";
+export type { Warning, WarningContext } from "./warnings.js";
+export { resolveRedirect, sitemapEntries, alternates } from "./site.js";
 export type {
   ContentStore,
   StoredContent,
@@ -56,6 +61,7 @@ export type {
   MediaListFilter,
   MediaListResult,
   StoredRevision,
+  StoredRedirect,
 } from "./store.js";
 export { matches, mediaMatches, pageMedia, pageOf, recencyKey, encodeCursor, decodeCursor } from "./list.js";
 export { MemoryStore } from "./stores/memory.js";

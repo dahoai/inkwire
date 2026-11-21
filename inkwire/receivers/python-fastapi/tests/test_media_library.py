@@ -43,6 +43,8 @@ def test_a_saved_item_carries_type_time_and_alt(any_store):
         "url": item.url,
         "alt": "One pixel",
         "mime_type": "image/png",
+        "width": 1,
+        "height": 1,
         "created_at": item.created_at,
     }
 
@@ -145,6 +147,7 @@ def test_filestore_persists_alt_title_filename_mime_and_time_in_a_sidecar(tmp_pa
     assert meta["mime_type"] == "image/png"
     assert meta["created_at"] == item.created_at
     assert (meta["alt"], meta["title"]) == ("Alt", "Title")
+    assert (meta["width"], meta["height"]) == (1, 1)
 
     # a fresh store over the same folder (a restart) lists the same item
     again = FileStore(tmp_path, media_url_base="https://site.test/media")
@@ -155,6 +158,8 @@ def test_filestore_persists_alt_title_filename_mime_and_time_in_a_sidecar(tmp_pa
         "alt": "Alt",
         "title": "Title",
         "mime_type": "image/png",
+        "width": 1,
+        "height": 1,
         "created_at": item.created_at,
     }
 
@@ -407,3 +412,15 @@ def test_the_url_variant_without_a_fetcher_is_a_400_not_a_500():
     api = Api(create_app(store=MemoryStore(), api_keys=KEYS, config=make_config()))
     response = api.post("/api/media", json={"url": "https://example.test/a.png"})
     assert response.status_code == 400 and error_code(response) == "invalid_payload"
+
+
+def test_image_size_reads_every_accepted_format():
+    from inkwire_receiver.media import image_size
+
+    assert image_size(bytes.fromhex("474946383961" "2003" "1000"), "image/gif") == (800, 16)
+    assert image_size(bytes.fromhex("ffd8" "ffe00004abcd" "ffc2000b08012c019003012200"), "image/jpeg") == (400, 300)
+    vp8x = b"RIFF\0\0\0\0WEBPVP8X" + bytes(4) + bytes(4) + (1919).to_bytes(3, "little") + (1079).to_bytes(3, "little")
+    assert image_size(vp8x, "image/webp") == (1920, 1080)
+    ispe = (20).to_bytes(4, "big") + b"ispe" + bytes(4) + (1200).to_bytes(4, "big") + (630).to_bytes(4, "big")
+    assert image_size(bytes.fromhex("0000001c667479706176696600000000") + ispe, "image/avif") == (1200, 630)
+    assert image_size(bytes.fromhex("ffd8ff"), "image/jpeg") is None

@@ -9,7 +9,7 @@ export async function POST(req: Request) {
   const { keys, store, config } = getInkwire();
   const refused = tooLarge(req, config.limits?.markdown_bytes ?? 1_000_000);
   if (refused) return refused;
-  return toResponse(await handleUpsert({ authHeader: req.headers.get("authorization"), rawBody: await req.text(), keys, store, config }));
+  return toResponse(await handleUpsert({ authHeader: req.headers.get("authorization"), rawBody: await req.text(), query: new URL(req.url).searchParams, keys, store, config }));
 }
 
 export async function GET(req: Request) {

@@ -24,6 +24,8 @@
     "name": "Isaac",
     "email": "i@x.com"
   },
+  "lang": "en",
+  "translation_key": "cut-audit-time",
   "status": "published",
   "published_at": "2026-07-22T04:00:00Z",
   "categories": [

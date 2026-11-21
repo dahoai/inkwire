@@ -308,5 +308,32 @@ export function runStoreContract(o: StoreContractOptions): void {
         assert.deepEqual(await store.listRevisions(A, saved.id), [], "moved, not copied");
         assert.deepEqual(await store.listRevisions(A, "../../etc/passwd"), [], "a hostile id never reaches a path");
       }));
+
+    test("redirects (when the store has them): one per old address, replaced, scoped, follow a move", () =>
+      withStore(async (store) => {
+        if (!store.saveRedirect || !store.findRedirect || !store.moveRedirects) return;
+        const at = iso(1);
+        assert.equal(await store.findRedirect(A, "post", "old"), null);
+        await store.saveRedirect(A, { kind: "post", slug: "old", id: "id-1", created_at: at });
+        await store.saveRedirect(A, { kind: "post", slug: "old", id: "id-2", created_at: at });
+        assert.deepEqual(await store.findRedirect(A, "post", "old"), { kind: "post", slug: "old", id: "id-2", created_at: at }, "the newest one wins");
+        assert.equal(await store.findRedirect(A, "page", "old"), null, "per kind");
+        if (o.scoped !== false) assert.equal(await store.findRedirect(B, "post", "old"), null, "another scope sees none of it");
+        await store.moveRedirects(A, "id-2", "id-3");
+        assert.equal((await store.findRedirect(A, "post", "old"))?.id, "id-3");
+      }));
+
+    test("translations (when the store keeps them): lang and translation_key come back and filter list", () =>
+      withStore(async (store) => {
+        if (!store.translations) return;
+        await store.save(A, entry({ slug: "en", external_id: "en", lang: "en", translation_key: "home" }));
+        await store.save(A, entry({ slug: "fr", external_id: "fr", lang: "fr-CA", translation_key: "home" }));
+        await store.save(A, entry({ slug: "solo", external_id: "solo" }));
+        const fr = (await store.list(A, { lang: "fr-CA", limit: 10 })).items;
+        assert.deepEqual(fr.map((e) => [e.slug, e.lang, e.translation_key]), [["fr", "fr-CA", "home"]]);
+        assert.deepEqual((await store.list(A, { translation_key: "home", limit: 10 })).items.map((e) => e.slug).sort(), ["en", "fr"]);
+        const solo = (await store.list(A, { slug: "solo", limit: 1 })).items[0]!;
+        assert.ok(!("lang" in solo) || solo.lang === undefined, "absent, not null");
+      }));
   });
 }

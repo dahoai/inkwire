@@ -32,6 +32,17 @@ async function publish(body) {
   return json;
 }
 
+async function api(method, path, body) {
+  const response = await pacedFetch(`${BASE.replace(/\/$/, "")}${path}`, {
+    method,
+    headers: { authorization: `Bearer ${KEY}`, ...(body ? { "content-type": "application/json" } : {}) },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(`${method} ${path} returned ${response.status}: ${JSON.stringify(json)}`);
+  return json;
+}
+
 function decode(value) {
   return value
     .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
@@ -195,13 +206,64 @@ try {
   });
 
   const problems = [...explicitProblems.map((p) => `overrides: ${p}`), ...fallbackProblems.map((p) => `defaults: ${p}`)];
+  const passed = ["SEO Profile 1 overrides", "SEO Profile 1 defaults"];
+  const features = (await api("GET", "/api/inkwire").catch(() => null))?.features ?? [];
+
+  // An old address answers with one permanent redirect to the entry's current URL.
+  if (features.includes("redirects") && features.includes("update")) {
+    const moved = await publish({ external_id: `${id}-moved`, title: "SEO moved", markdown: "Body", status: "published", slug: `${id}-before` });
+    const after = await api("PATCH", `/api/content/${encodeURIComponent(moved.id)}`, { slug: `${id}-after` });
+    const response = await fetch(moved.url, { redirect: "manual" });
+    const location = response.headers.get("location");
+    const before = problems.length;
+    if (response.status !== 301 && response.status !== 308) problems.push(`redirects: the old address answered ${response.status}, not 301 or 308`);
+    else if (!location || new URL(location, moved.url).href !== new URL(after.url).href) problems.push(`redirects: Location ${location} is not ${after.url}`);
+    if (problems.length === before) passed.push("redirects: an old address redirects to the current one");
+  }
+
+  // Translations: each page lists every public version, itself included, as hreflang alternates.
+  if (features.includes("translations")) {
+    const key = `${id}-tr`;
+    const en = await publish({ external_id: `${id}-en`, title: "SEO in English", markdown: "Body", status: "published", lang: "en", translation_key: key });
+    const fr = await publish({ external_id: `${id}-fr`, title: "SEO en français", markdown: "Corps", status: "published", lang: "fr", translation_key: key });
+    const before = problems.length;
+    for (const [page, label] of [[en, "en page"], [fr, "fr page"]]) {
+      const links = tags(await fetchPage(page.url), "link").filter((l) => l.rel?.toLowerCase() === "alternate" && l.hreflang);
+      const href = (lang) => links.find((l) => l.hreflang.toLowerCase() === lang)?.href;
+      checkEqual(problems, `hreflang en on the ${label}`, href("en"), en.url);
+      checkEqual(problems, `hreflang fr on the ${label}`, href("fr"), fr.url);
+    }
+    if (problems.length === before) passed.push("translations: hreflang alternates, self included");
+  }
+
+  // Sitemap (asked with --sitemap): published, indexable, self-canonical entries only, with lastmod.
+  if (process.env.SITEMAP) {
+    const draft = await publish({ external_id: `${id}-draft`, title: "SEO draft", markdown: "Body", status: "draft" });
+    const sitemapUrl = process.env.SITEMAP_URL ?? new URL("/sitemap.xml", fallback.url).href;
+    const locs = new Map();
+    const read = async (url, depth) => {
+      const xml = await (await fetch(url)).text();
+      for (const m of xml.matchAll(/<(url|sitemap)>([\s\S]*?)<\/\1>/g)) {
+        const loc = decode(/<loc>([\s\S]*?)<\/loc>/.exec(m[2])?.[1]?.trim() ?? "");
+        if (m[1] === "sitemap" && depth < 1) await read(loc, depth + 1);
+        else if (m[1] === "url") locs.set(loc, /<lastmod>([\s\S]*?)<\/lastmod>/.exec(m[2])?.[1]?.trim());
+      }
+    };
+    await read(sitemapUrl, 0);
+    const before = problems.length;
+    if (!locs.has(fallback.url)) problems.push(`sitemap: ${fallback.url} (published, indexable) is not listed`);
+    else if (!locs.get(fallback.url) || Number.isNaN(Date.parse(locs.get(fallback.url)))) problems.push("sitemap: the entry has no valid <lastmod>");
+    if (locs.has(explicit.url)) problems.push("sitemap: a noindex entry whose canonical points elsewhere is listed");
+    if (draft.url && locs.has(draft.url)) problems.push("sitemap: a draft is listed");
+    if (problems.length === before) passed.push("sitemap: public, indexable entries with lastmod; no drafts, no noindex");
+  }
+
   if (problems.length) {
     for (const problem of problems) console.log(`FAIL ${problem}`);
     console.log(`\n${problems.length} SEO rendering check(s) failed`);
     process.exitCode = 1;
   } else {
-    console.log("PASS SEO Profile 1 overrides");
-    console.log("PASS SEO Profile 1 defaults");
+    for (const p of passed) console.log(`PASS ${p}`);
     console.log("\nSEO Profile 1 rendering conformance passed");
   }
 } catch (error) {

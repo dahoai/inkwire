@@ -2,12 +2,13 @@ import { randomBytes } from "node:crypto";
 import { type ApiKey, authorize, requireWrite } from "./auth.js";
 import { InkwireError } from "./errors.js";
 import { withLock } from "./lock.js";
-import { assertImage, parseMultipart, safeFilename } from "./media.js";
-import { renderMarkdown, slugify } from "./render.js";
+import { assertImage, imageSize, parseMultipart, safeFilename } from "./media.js";
+import { renderMarkdown, sizeImages, slugify } from "./render.js";
 import { ContentInput, MediaPatchSchema, MediaUrlInput, PatchSchema, RestoreInput } from "./schema.js";
 import { cleanOverrides, effectiveSeo, mergeOverrides } from "./seo.js";
 import { pageMedia } from "./list.js";
 import type { ContentStore, SaveEntry, StoredContent, StoredMedia, StoredRevision } from "./store.js";
+import { seoWarnings, type Warning } from "./warnings.js";
 
 export const INKWIRE_VERSION = "1";
 export const MAX_PAGE = 100;
@@ -130,6 +131,8 @@ function summary(e: StoredContent) {
     ...(e.excerpt !== undefined ? { excerpt: e.excerpt } : {}),
     ...(e.tags !== undefined ? { tags: e.tags } : {}),
     ...(e.categories !== undefined ? { categories: e.categories } : {}),
+    ...(e.lang !== undefined ? { lang: e.lang } : {}),
+    ...(e.translation_key !== undefined ? { translation_key: e.translation_key } : {}),
     published_at: e.published_at,
     updated_at: e.updated_at,
   };
@@ -165,8 +168,94 @@ async function keepRevision(store: ContentStore, scope: string, entry: StoredCon
 
 /** A store whose ids follow the slug or kind moved the entry: its history goes with it. */
 async function followMove(store: ContentStore, scope: string, fromId: string, toId: string) {
-  if (fromId !== toId && hasRevisions(store)) await store.moveRevisions!(scope, fromId, toId);
+  if (fromId === toId) return;
+  if (hasRevisions(store)) await store.moveRevisions!(scope, fromId, toId);
+  if (hasRedirects(store)) await store.moveRedirects!(scope, fromId, toId);
 }
+
+// --- Redirects: a write that changes an entry's address keeps the old one, leading to the entry.
+
+const hasRedirects = (s: ContentStore) => Boolean(s.saveRedirect && s.findRedirect && s.moveRedirects);
+
+/** After a save that replaced `before`: the history and redirects follow the id, the old address redirects. */
+async function afterMove(store: ContentStore, scope: string, before: StoredContent, saved: StoredContent) {
+  await followMove(store, scope, before.id, saved.id);
+  if (hasRedirects(store) && (before.kind !== saved.kind || before.slug !== saved.slug)) {
+    await store.saveRedirect!(scope, { kind: before.kind, slug: before.slug, id: saved.id, created_at: new Date().toISOString() });
+  }
+}
+
+// --- Translations: only a store that keeps the fields takes them.
+
+function requireTranslations(store: ContentStore, o: object) {
+  if (!store.translations && ("lang" in o || "translation_key" in o)) {
+    throw new InkwireError("invalid_payload", "this receiver does not store translations: unknown field lang, translation_key");
+  }
+}
+
+// --- Rendering and warnings
+
+/** Media items read per write to size images. ponytail: a full scan; a store with a url lookup would skip it. */
+const SIZE_SCAN_CAP = 2_000;
+/** Entries read per write to check duplicates and links. */
+const WARN_SCAN_CAP = 2_000;
+
+async function render(store: ContentStore, scope: string, markdown: string): Promise<string> {
+  const html = renderMarkdown(markdown);
+  if (!store.listMedia || !html.includes("<img")) return html;
+  const sizes = new Map<string, { width: number; height: number }>();
+  let cursor: string | undefined;
+  let seen = 0;
+  do {
+    const page = await store.listMedia(scope, { limit: MAX_PAGE, ...(cursor ? { cursor } : {}) });
+    for (const m of page.items) if (m.width && m.height) sizes.set(m.url, { width: m.width, height: m.height });
+    seen += page.items.length;
+    cursor = page.next_cursor ?? undefined;
+  } while (cursor && seen < SIZE_SCAN_CAP);
+  return sizeImages(html, sizes);
+}
+
+async function siteEntries(store: ContentStore, scope: string, exceptId?: string): Promise<StoredContent[]> {
+  const all: StoredContent[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await store.list(scope, { limit: MAX_PAGE, ...(cursor ? { cursor } : {}) });
+    all.push(...page.items);
+    cursor = page.next_cursor ?? undefined;
+  } while (cursor && all.length < WARN_SCAN_CAP);
+  return all.filter((e) => e.id !== exceptId);
+}
+
+/** The warnings for an entry as it will be, or none when the receiver does not advertise `warnings`. */
+async function warningsFor(
+  store: ContentStore,
+  scope: string,
+  config: InkwireConfig,
+  entry: SaveEntry & { url?: string },
+  others: StoredContent[],
+): Promise<Warning[] | undefined> {
+  if (!discoveryBody(config, store).features.includes("warnings")) return undefined;
+  return seoWarnings(entry, {
+    siteUrl: config.site.url,
+    others,
+    ...(hasRedirects(store) ? { redirects: async (kind: string, slug: string) => Boolean(await store.findRedirect!(scope, kind, slug)) } : {}),
+  });
+}
+
+/** Where an entry would live, from another entry of its kind (a store finalizes the real address). */
+function predictUrl(kind: string, slug: string, samples: (StoredContent | undefined)[]): string | undefined {
+  const s = samples.find((e) => e && e.kind === kind && e.url.includes(e.slug));
+  if (!s) return undefined;
+  const at = s.url.lastIndexOf(s.slug);
+  return s.url.slice(0, at) + slug + s.url.slice(at + s.slug.length);
+}
+
+const isDryRun = (query?: URLSearchParams) => {
+  const v = query?.get("dry_run");
+  if (v === null || v === undefined || v === "false") return false;
+  if (v === "true" || v === "") return true;
+  throw new InkwireError("invalid_payload", 'dry_run must be "true" or "false"');
+};
 
 function requireRevisions(store: ContentStore) {
   if (!hasRevisions(store)) throw new InkwireError("not_found", "this receiver keeps no revisions");
@@ -230,20 +319,26 @@ const authedWrite = (authHeader: string | null | undefined, keys: ApiKey[]) => {
 export interface UpsertArgs {
   authHeader: string | null | undefined;
   rawBody: string | Buffer;
+  /** The request's query string: `dry_run=true` validates and answers without writing. */
+  query?: URLSearchParams;
   keys: ApiKey[];
   store: ContentStore;
   config: InkwireConfig;
 }
 
-export function handleUpsert({ authHeader, rawBody, keys, store, config }: UpsertArgs): Promise<HandlerResult> {
+export function handleUpsert({ authHeader, rawBody, query, keys, store, config }: UpsertArgs): Promise<HandlerResult> {
   return guarded(async () => {
-    const key = authedWrite(authHeader, keys);
+    const dryRun = isDryRun(query);
+    // A dry run writes nothing, so a read-only key may check a draft too.
+    const key = dryRun ? authorize(authHeader, keys) : authedWrite(authHeader, keys);
     const limits = limitsOf(config);
     // JSON escapes can make a body up to ~6x its text: refuse the absurd before parsing it.
     if (rawBody.length > limits.markdown_bytes * 6 + 100_000) {
       throw new InkwireError("too_large", `the body is over the limit (markdown_bytes ${limits.markdown_bytes})`);
     }
-    const input = validate(ContentInput, parseJson(rawBody));
+    const raw = parseJson(rawBody);
+    requireTranslations(store, raw);
+    const input = validate(ContentInput, raw);
     requireKind(config, input.kind);
     if (bytesOf(input.markdown) > limits.markdown_bytes) {
       throw new InkwireError("too_large", `markdown is over the limit (markdown_bytes ${limits.markdown_bytes})`);
@@ -270,7 +365,7 @@ export function handleUpsert({ authHeader, rawBody, keys, store, config }: Upser
         title: input.title,
         slug,
         markdown: input.markdown,
-        html: renderMarkdown(input.markdown),
+        html: await render(store, scope, input.markdown),
         ...(input.excerpt !== undefined ? { excerpt: input.excerpt } : {}),
         ...(input.tags !== undefined ? { tags: input.tags } : {}),
         ...(input.categories !== undefined ? { categories: input.categories } : {}),
@@ -279,14 +374,23 @@ export function handleUpsert({ authHeader, rawBody, keys, store, config }: Upser
         ...(input.canonical_url !== undefined ? { canonical_url: input.canonical_url } : {}),
         seo: cleanOverrides(input.seo),
         ...(input.author !== undefined ? { author: input.author } : {}),
+        ...(input.lang !== undefined ? { lang: input.lang } : {}),
+        ...(input.translation_key !== undefined ? { translation_key: input.translation_key } : {}),
         status: input.status,
         published_at: input.published_at ?? existing?.published_at ?? now,
         updated_at: now,
         version: (existing?.version ?? 0) + 1,
       };
+      const others = await siteEntries(store, scope, existing?.id);
+      const url = existing && existing.kind === entry.kind && existing.slug === entry.slug ? existing.url : predictUrl(entry.kind, slug, [existing, ...others]);
+      const warnings = await warningsFor(store, scope, config, { ...entry, ...(url ? { url } : {}) }, others);
+      const extra = warnings ? { warnings } : {};
+      if (dryRun) {
+        return ok({ id: existing?.id ?? null, external_id: entry.external_id, ...(url ? { url } : {}), slug, kind: entry.kind, status: entry.status, created: !existing, dry_run: true, ...extra });
+      }
       if (existing) await keepRevision(store, scope, existing, "update", config);
       const saved = await store.save(scope, entry);
-      if (existing) await followMove(store, scope, existing.id, saved.id);
+      if (existing) await afterMove(store, scope, existing, saved);
       return ok(
         {
           id: saved.id,
@@ -296,6 +400,7 @@ export function handleUpsert({ authHeader, rawBody, keys, store, config }: Upser
           kind: saved.kind,
           status: saved.status,
           created: !existing,
+          ...extra,
         },
         etagHeader(saved),
       );
@@ -317,6 +422,9 @@ export interface ListArgs {
 export function handleList({ authHeader, query, keys, store }: ListArgs): Promise<HandlerResult> {
   return guarded(async () => {
     const key = authorize(authHeader, keys);
+    if (!store.translations && (query.get("lang") || query.get("translation_key"))) {
+      throw new InkwireError("invalid_payload", "this receiver does not store translations: lang and translation_key are not filters here");
+    }
     const status = query.get("status") || undefined;
     if (status !== undefined && status !== "draft" && status !== "published") {
       throw new InkwireError("invalid_payload", 'status must be "draft" or "published"');
@@ -330,6 +438,8 @@ export function handleList({ authHeader, query, keys, store }: ListArgs): Promis
       ...(query.get("search") ? { search: query.get("search")! } : {}),
       ...(query.get("external_id") ? { external_id: query.get("external_id")! } : {}),
       ...(query.get("slug") ? { slug: query.get("slug")! } : {}),
+      ...(query.get("lang") ? { lang: query.get("lang")! } : {}),
+      ...(query.get("translation_key") ? { translation_key: query.get("translation_key")! } : {}),
       limit,
       ...(query.get("cursor") ? { cursor: query.get("cursor")! } : {}),
     });
@@ -363,21 +473,25 @@ export interface PatchArgs {
   authHeader: string | null | undefined;
   id: string;
   rawBody: string | Buffer;
+  /** The request's query string: `dry_run=true` validates and answers without writing. */
+  query?: URLSearchParams;
   ifMatchHeader?: string | null;
   keys: ApiKey[];
   store: ContentStore;
   config: InkwireConfig;
 }
 
-export function handlePatch({ authHeader, id, rawBody, ifMatchHeader, keys, store, config }: PatchArgs): Promise<HandlerResult> {
+export function handlePatch({ authHeader, id, rawBody, query, ifMatchHeader, keys, store, config }: PatchArgs): Promise<HandlerResult> {
   return guarded(async () => {
-    const key = authedWrite(authHeader, keys);
+    const dryRun = isDryRun(query);
+    const key = dryRun ? authorize(authHeader, keys) : authedWrite(authHeader, keys);
     const limits = limitsOf(config);
     if (rawBody.length > limits.markdown_bytes * 6 + 100_000) {
       throw new InkwireError("too_large", `the body is over the limit (markdown_bytes ${limits.markdown_bytes})`);
     }
     const raw = parseJson(rawBody);
     if ("external_id" in raw) throw new InkwireError("invalid_payload", "external_id cannot be changed");
+    requireTranslations(store, raw);
     const patch = validate(PatchSchema, raw);
     if (patch.kind !== undefined) requireKind(config, patch.kind);
     if (patch.markdown !== undefined && bytesOf(patch.markdown) > limits.markdown_bytes) {
@@ -407,22 +521,31 @@ export function handlePatch({ authHeader, id, rawBody, ifMatchHeader, keys, stor
         title: patch.title ?? current.title,
         slug,
         markdown: patch.markdown ?? current.markdown,
-        html: patch.markdown !== undefined ? renderMarkdown(patch.markdown) : current.html,
+        html: patch.markdown !== undefined ? await render(store, scope, patch.markdown) : current.html,
         seo: patch.seo !== undefined ? mergeOverrides(current.seo, patch.seo) : current.seo,
         status: patch.status ?? current.status,
         published_at: patch.published_at === null ? now : (patch.published_at ?? current.published_at),
         updated_at: now,
         version: current.version + 1,
       };
-      const optional = ["excerpt", "tags", "categories", "cover_image_url", "cover_image_alt", "canonical_url", "author"] as const;
+      const optional = ["excerpt", "tags", "categories", "cover_image_url", "cover_image_alt", "canonical_url", "author", "lang", "translation_key"] as const;
       for (const f of optional) {
         const v = f in patch ? (patch as Record<string, unknown>)[f] : (current as unknown as Record<string, unknown>)[f];
         if (v !== null && v !== undefined) (next as unknown as Record<string, unknown>)[f] = v;
       }
+      const others = await siteEntries(store, scope, current.id);
+      const url = next.kind === current.kind && next.slug === current.slug ? current.url : predictUrl(next.kind, next.slug, [current, ...others]);
+      const warnings = await warningsFor(store, scope, config, { ...next, ...(url ? { url } : {}) }, others);
+      const extra = warnings ? { warnings } : {};
+      if (dryRun) {
+        const preview = full({ ...next, id: current.id, url: url ?? "", etag: "" } as StoredContent);
+        if (!url) delete (preview as { url?: string }).url;
+        return ok({ ...preview, dry_run: true, ...extra });
+      }
       await keepRevision(store, scope, current, "update", config);
       const saved = await store.save(scope, next);
-      await followMove(store, scope, current.id, saved.id);
-      return ok(full(saved), etagHeader(saved));
+      await afterMove(store, scope, current, saved);
+      return ok({ ...full(saved), ...extra }, etagHeader(saved));
     });
   });
 }
@@ -539,13 +662,15 @@ export function handleRestore({ authHeader, id, rawBody, ifMatchHeader, keys, st
         id: selfId,
         key: scope,
         // Rendered again: the sanitizer in force now applies, not the one at the time.
-        html: renderMarkdown(was.markdown),
+        html: await render(store, scope, was.markdown),
         updated_at: new Date().toISOString(),
         version: Math.max(current?.version ?? 0, version) + 1,
       };
       const saved = await store.save(scope, next);
-      await followMove(store, scope, selfId, saved.id);
-      return ok(full(saved), etagHeader(saved));
+      if (current) await afterMove(store, scope, current, saved);
+      else await followMove(store, scope, selfId, saved.id);
+      const warnings = await warningsFor(store, scope, config, saved, await siteEntries(store, scope, saved.id));
+      return ok({ ...full(saved), ...(warnings ? { warnings } : {}) }, etagHeader(saved));
     });
   });
 }
@@ -609,6 +734,7 @@ export function handleMedia({ authHeader, contentType, rawBody, keys, config, st
       contentType: imageType,
       filename: safeFilename(filename, imageType),
       ...(alt !== undefined && alt !== "" ? { alt } : {}),
+      ...(imageSize(bytes, imageType) ?? {}),
     });
     return ok(mediaItem(saved));
   });
@@ -620,6 +746,7 @@ const mediaItem = (m: StoredMedia) => ({
   ...(m.alt !== undefined ? { alt: m.alt } : {}),
   ...(m.title !== undefined ? { title: m.title } : {}),
   mime_type: m.mime_type,
+  ...(m.width !== undefined && m.height !== undefined ? { width: m.width, height: m.height } : {}),
   created_at: m.created_at,
 });
 
@@ -667,6 +794,34 @@ export function handleMediaUpdate({ authHeader, id, rawBody, keys, store }: Medi
     const saved = await store.updateMedia(key.scope, id, patch);
     if (!saved) throw new InkwireError("not_found", `no media with id "${id}"`);
     return ok(mediaItem(saved));
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// GET /api/redirects  (feature `redirects`)
+
+export interface RedirectArgs {
+  authHeader: string | null | undefined;
+  query: URLSearchParams;
+  keys: ApiKey[];
+  store: ContentStore;
+}
+
+/** Where an old address (`kind`, `slug`) leads now. */
+export function handleRedirect({ authHeader, query, keys, store }: RedirectArgs): Promise<HandlerResult> {
+  return guarded(async () => {
+    const key = authorize(authHeader, keys);
+    if (!hasRedirects(store)) throw new InkwireError("not_found", "this receiver keeps no redirects");
+    const kind = query.get("kind") || "post";
+    const slug = query.get("slug");
+    if (!slug) throw new InkwireError("invalid_payload", "slug is required");
+    if (await slugOwner(store, key.scope, kind, slug)) {
+      throw new InkwireError("not_found", `an entry lives at ${kind}/${slug}: nothing redirects from there`);
+    }
+    const r = await store.findRedirect!(key.scope, kind, slug);
+    const e = r ? await store.get(key.scope, r.id) : null;
+    if (!e) throw new InkwireError("not_found", `nothing redirects from ${kind}/${slug}`);
+    return ok({ kind, slug, id: e.id, url: e.url, status: e.status });
   });
 }
 
@@ -750,6 +905,9 @@ export function discoveryBody(config: InkwireConfig, store?: ContentStore) {
     ...(store?.listMedia ? ["media_list"] : []),
     ...(store?.updateMedia ? ["media_update"] : []),
     ...(store && hasRevisions(store) ? ["revisions"] : []),
+    "warnings",
+    ...(store && hasRedirects(store) ? ["redirects"] : []),
+    ...(store?.translations ? ["translations"] : []),
   ];
   const features = [...new Set(["upsert", ...(config.features ?? derived)])];
   const { revisions: _keep, ...limits } = limitsOf(config);
