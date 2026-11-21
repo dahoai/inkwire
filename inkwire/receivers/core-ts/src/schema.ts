@@ -102,6 +102,9 @@ export const MediaUrlInput = z
   .object({ url: httpUrl, alt: z.string().max(1024).optional() })
   .strict();
 
+/** POST /api/content/{id}/restore. */
+export const RestoreInput = z.object({ revision: z.string().min(1).max(200) }).strict();
+
 export const MediaPatchSchema = z
   .object({ alt: z.string().max(1024).nullable(), title: z.string().max(512).nullable() })
   .partial()

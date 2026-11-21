@@ -492,13 +492,89 @@ describe("media", () => {
   });
 });
 
+describe("revisions", () => {
+  test("an update keeps what it replaced; restore brings it back and is itself undoable", async () => {
+    const e = env();
+    const a = b(await e.upsert(post(1, { excerpt: "first ex", seo: { title: "Old SEO" } })));
+    assert.deepEqual(b(await e.revisions(a.id)).items, [], "a fresh entry has no past versions");
+    await e.patch(a.id, { title: "Broken", markdown: "oops", excerpt: null, seo: null });
+    const hist = b(await e.revisions(a.id)).items;
+    assert.equal(hist.length, 1);
+    assert.deepEqual([hist[0].replaced_by, hist[0].title, hist[0].kind, hist[0].slug], ["update", "Post 1", "post", a.slug]);
+    const one = await e.revision(a.id, hist[0].revision);
+    assert.equal(one.status, 200);
+    assert.equal(b(one).entry.markdown, "# Post 1\n\nbody 1");
+    assert.equal(b(one).entry.seo.title, "Old SEO", "a revision shows the effective seo, like get");
+
+    const etag = (await e.get(a.id)).headers.ETag!;
+    const r = await e.restore(a.id, { revision: hist[0].revision }, etag);
+    assert.equal(r.status, 200);
+    assert.ok(r.headers.ETag);
+    assert.deepEqual([b(r).title, b(r).markdown, b(r).excerpt, b(r).seo.title, b(r).id], ["Post 1", "# Post 1\n\nbody 1", "first ex", "Old SEO", a.id]);
+    assert.notEqual(r.headers.ETag, etag, "a restore is a new write");
+    const after = b(await e.revisions(a.id)).items;
+    assert.deepEqual(after.map((x: any) => [x.replaced_by, x.title]), [["restore", "Broken"], ["update", "Post 1"]], "newest first");
+    assert.equal(b(await e.restore(a.id, { revision: after[0].revision })).title, "Broken", "undo the undo");
+  });
+  test("upsert of the same external_id keeps the replaced version too", async () => {
+    const e = env();
+    const a = b(await e.upsert(post(1)));
+    await e.upsert(post(1, { title: "Reposted" }));
+    assert.deepEqual(b(await e.revisions(a.id)).items.map((x: any) => x.title), ["Post 1"]);
+  });
+  test("a deleted entry is listed and restored under its id", async () => {
+    const e = env();
+    const a = b(await e.upsert(post(1)));
+    await e.del(a.id);
+    const hist = b(await e.revisions(a.id)).items;
+    assert.equal(hist[0].replaced_by, "delete");
+    const r = await e.restore(a.id, { revision: hist[0].revision });
+    assert.equal(r.status, 200);
+    assert.equal(b(r).id, a.id);
+    assert.equal((await e.get(a.id)).status, 200);
+    assert.equal(b(await e.list("")).items.length, 1);
+  });
+  test("restore refuses: a stale If-Match, an unknown revision, a slug taken since, a read-only key", async () => {
+    const e = env();
+    const a = b(await e.upsert(post(1, { slug: "home" })));
+    const etag = (await e.get(a.id)).headers.ETag!;
+    await e.patch(a.id, { slug: "moved" });
+    const rev = b(await e.revisions(a.id)).items[0].revision;
+    assert.equal(errCode(await e.restore(a.id, { revision: rev }, etag)), "stale");
+    assert.equal(errCode(await e.restore(a.id, { revision: "nope" })), "not_found");
+    assert.equal(errCode(await e.restore(a.id, {})), "invalid_payload");
+    assert.equal(errCode(await e.restore(a.id, { revision: rev }, undefined, RO)), "forbidden");
+    await e.upsert(post(2, { slug: "home" }));
+    assert.equal(errCode(await e.restore(a.id, { revision: rev })), "conflict");
+    assert.equal(b(await e.get(a.id)).slug, "moved", "nothing changed");
+  });
+  test("unknown id -> 404; history is capped at limits.revisions; reads work with a read-only key", async () => {
+    const e = env();
+    assert.equal(errCode(await e.revisions("nope")), "not_found");
+    const a = b(await e.upsert(post(1)));
+    for (let i = 0; i < 60; i++) await e.patch(a.id, { title: `t${i}` });
+    const items = b(await e.revisions(a.id, RO)).items;
+    assert.equal(items.length, 50);
+    assert.equal(items[0].title, "t58");
+  });
+  test("a store without revisions answers not_found and keeps nothing", async () => {
+    const plain = Object.assign(Object.create(MemoryStore.prototype), new MemoryStore(), { saveRevision: undefined, listRevisions: undefined, moveRevisions: undefined });
+    const e = env(plain);
+    const a = b(await e.upsert(post(1)));
+    assert.equal((await e.patch(a.id, { title: "x" })).status, 200);
+    assert.equal(errCode(await e.revisions(a.id)), "not_found");
+    assert.ok(!discoveryBody(config, plain).features.includes("revisions"));
+  });
+});
+
 describe("discovery", () => {
   test("body: inkwire 1, site, features, kinds, limits", () => {
     const d = discoveryBody(config, new MemoryStore());
     assert.equal(d.inkwire, 1);
     assert.deepEqual(d.kinds, ["post", "page"]);
-    assert.deepEqual(d.features, ["upsert", "list", "get", "update", "delete", "terms", "media", "media_url", "media_list", "media_update"]);
-    assert.deepEqual(d.limits, { markdown_bytes: 1000, media_bytes: 4000 });
+    assert.deepEqual(d.features, ["upsert", "list", "get", "update", "delete", "terms", "media", "media_url", "media_list", "media_update", "revisions"]);
+    assert.deepEqual(d.limits, { markdown_bytes: 1000, media_bytes: 4000, revisions: 50 });
+    assert.ok(!("revisions" in discoveryBody(config).limits), "no store, no revisions limit");
   });
   test("explicit features win and always include upsert; media features follow the store; schedule follows the config; default limits", () => {
     assert.deepEqual(discoveryBody({ ...config, features: ["list"] }).features, ["upsert", "list"]);

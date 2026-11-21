@@ -287,5 +287,26 @@ export function runStoreContract(o: StoreContractOptions): void {
         assert.equal(await store.updateMedia(A, "0123456789abcdef", { alt: "x" }), null);
         assert.equal(await store.updateMedia(A, "../../etc/passwd", { alt: "x" }), null, "a hostile id never reaches a path");
       }));
+
+    test("revisions (when the store has them): newest first, capped at keep, scoped, outlive a delete, follow a move", () =>
+      withStore(async (store) => {
+        if (!store.saveRevision || !store.listRevisions || !store.moveRevisions) return;
+        const saved = await store.save(A, entry({ slug: "rev" }));
+        const { key: _k, ...was } = saved;
+        const rev = (n: number) => ({ revision: `r${n}`, created_at: iso(n), replaced_by: "update" as const, entry: { ...was, title: `v${n}` } });
+        assert.deepEqual(await store.listRevisions(A, saved.id), [], "no history is an empty list");
+        for (const n of [1, 2, 3]) await store.saveRevision(A, saved.id, rev(n), 2);
+        const listed = await store.listRevisions(A, saved.id);
+        assert.deepEqual(listed.map((r) => r.revision), ["r3", "r2"], "newest first, only the newest `keep`");
+        assert.equal(listed[0].entry.title, "v3", "the whole entry comes back");
+        assert.deepEqual(listed[0].entry.seo, was.seo);
+        if (o.scoped !== false) assert.deepEqual(await store.listRevisions(B, saved.id), [], "another scope sees none of it");
+        await store.remove(A, saved.id);
+        assert.equal((await store.listRevisions(A, saved.id)).length, 2, "the history outlives a delete");
+        await store.moveRevisions(A, saved.id, "post.rev-moved");
+        assert.deepEqual((await store.listRevisions(A, "post.rev-moved")).map((r) => r.revision), ["r3", "r2"]);
+        assert.deepEqual(await store.listRevisions(A, saved.id), [], "moved, not copied");
+        assert.deepEqual(await store.listRevisions(A, "../../etc/passwd"), [], "a hostile id never reaches a path");
+      }));
   });
 }

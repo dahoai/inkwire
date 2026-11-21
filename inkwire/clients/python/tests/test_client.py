@@ -12,6 +12,9 @@ from inkwire_client import (
     list_media,
     publish,
     remove,
+    restore,
+    revision,
+    revisions,
     terms,
     update,
     update_media,
@@ -139,6 +142,23 @@ def test_remove_ok(monkeypatch):
     assert res == {"id": "post:p-1", "deleted": True}
     assert calls["requests"][0].method == "DELETE"
     assert calls["requests"][0].headers["if-match"] == '"etag-123"'
+
+
+def test_revisions_and_restore(monkeypatch):
+    transport, calls = make_transport([
+        (200, {"items": [{"revision": "r1", "replaced_by": "update"}]}),
+        (200, {"revision": "r1", "entry": {"title": "Old"}}),
+        (200, {"id": "post.p", "title": "Old"}, {"etag": '"e2"'}),
+    ])
+    monkeypatch.setattr("inkwire_client._transport", transport, raising=False)
+    assert revisions("https://site.test", "k", "post.p")["items"][0]["revision"] == "r1"
+    assert revision("https://site.test", "k", "post.p", "r1")["entry"]["title"] == "Old"
+    item, etag = restore("https://site.test", "k", "post.p", "r1", if_match='"e1"')
+    assert (item["title"], etag) == ("Old", '"e2"')
+    r = calls["requests"]
+    assert [x.url.raw_path for x in r] == [b"/api/content/post.p/revisions", b"/api/content/post.p/revisions/r1", b"/api/content/post.p/restore"]
+    assert r[2].method == "POST" and r[2].headers["if-match"] == '"e1"'
+    assert json.loads(r[2].content) == {"revision": "r1"}
 
 
 def test_upload_media_json(monkeypatch):

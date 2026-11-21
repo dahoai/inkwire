@@ -28,14 +28,17 @@ res.writeHead(r.status, r.headers).end(JSON.stringify(r.body));
 | `GET /api/content` | `handleList` | `query: URLSearchParams`, `store` |
 | `GET /api/content/{id}` | `handleGet` | `id`, `store` |
 | `PATCH /api/content/{id}` | `handlePatch` | `id`, `rawBody`, `ifMatchHeader`, `store`, `config` |
-| `DELETE /api/content/{id}` | `handleDelete` | `id`, `ifMatchHeader`, `store` |
+| `DELETE /api/content/{id}` | `handleDelete` | `id`, `ifMatchHeader`, `store`, `config` |
+| `GET /api/content/{id}/revisions` | `handleRevisions` | `id`, `store` |
+| `GET /api/content/{id}/revisions/{revision}` | `handleRevision` | `id`, `revision`, `store` |
+| `POST /api/content/{id}/restore` | `handleRestore` | `id`, `rawBody`, `ifMatchHeader`, `store`, `config` |
 | `GET /api/terms` | `handleTerms` | `query`, `store` |
 | `POST /api/media` | `handleMedia` | `contentType`, `rawBody` (Buffer), `store`, `config` |
 | `GET /api/media` | `handleMediaList` | `query`, `store` |
 | `PATCH /api/media/{id}` | `handleMediaUpdate` | `id`, `rawBody`, `store` |
 | `GET /api/inkwire` | `handleDiscovery` (or `discoveryBody(config, store)`) | `config`, `store` |
 
-Pass the request's `If-Match` header through as `ifMatchHeader`; the core puts a quoted `ETag` on every single-entry response (and on the upsert response). Discovery advertises what is true: the media features follow the store (`media` needs `saveMedia`, `media_list` needs `listMedia`, `media_update` needs `updateMedia`, `media_url` also needs `config.fetchMedia`), `schedule` follows `config.schedule`, and `terms` is always there (terms are derived from the entries, by paging `list`).
+Pass the request's `If-Match` header through as `ifMatchHeader`; the core puts a quoted `ETag` on every single-entry response (and on the upsert response). Discovery advertises what is true: the media features follow the store (`media` needs `saveMedia`, `media_list` needs `listMedia`, `media_update` needs `updateMedia`, `media_url` also needs `config.fetchMedia`), `revisions` needs the three revision methods, `schedule` follows `config.schedule`, and `terms` is always there (terms are derived from the entries, by paging `list`).
 
 ## Keys
 
@@ -54,8 +57,13 @@ interface ContentStore {
   saveMedia?(key, media): Promise<StoredMedia>;          // absent = no `media` feature
   listMedia?(key, filter): Promise<{ items: StoredMedia[]; next_cursor: string | null }>; // absent = no `media_list`
   updateMedia?(key, id, { alt?, title? }): Promise<StoredMedia | null>;                   // `null` value clears; absent = no `media_update`
+  saveRevision?(key, id, revision: StoredRevision, keep): Promise<void>; // add one, keep the newest `keep`
+  listRevisions?(key, id): Promise<StoredRevision[]>;                     // newest first; survives a remove
+  moveRevisions?(key, fromId, toId): Promise<void>;                       // the id followed a slug/kind change
 }
 ```
+
+The three revision methods go together (any missing = no `revisions` feature). The handlers call them: every update, restore and delete first saves the entry it replaces, so a store only keeps a list per entry id (`MemoryStore` in memory, `FileStore` as `<root>/.revisions/<id>.json`). `limits.revisions` in the config sets how many each entry keeps (default 50). `GitHubStore` has none yet: a repo has its own history.
 
 The core finds an entry by `external_id`, and checks slug conflicts, with `list(key, { kind, external_id | slug, limit: 1 })`: make those filters cheap. `etag` is any opaque string that changes whenever the entry does. Handlers serialise writes per scope inside one process (`withLock`); a store shared by several processes needs its own conditional write.
 

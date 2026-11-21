@@ -113,7 +113,12 @@ jobs:
         with: { node-version: 22 }
       - run: npm ci && npm run build
         working-directory: inkwire/receivers/core-ts
+      - run: npm ci && npm run build
+        working-directory: inkwire/clients/node
       - run: npm ci
+        working-directory: packages/inkwire-mcp
+      # Against the client in this repo, not the one on npm: a new client function lands with its tool.
+      - run: npm install --no-save ../../inkwire/clients/node
         working-directory: packages/inkwire-mcp
       - run: npm test
         working-directory: packages/inkwire-mcp

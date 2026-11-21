@@ -80,11 +80,12 @@ A **receiver** is anything that implements the Inkwire wire contract per the spe
 
 - **Upsert on `external_id`** (per kind), scoped to the site/API key. Re-POST the same `external_id` to update in place; this is also how idempotency works.
 - **Kinds, not just posts.** An entry has a `kind` (`post`, `page`, ...); discovery lists the kinds a site holds.
-- **Discovery** (`GET /api/inkwire`) advertises `features`: `upsert`, `list`, `get`, `update`, `delete`, `terms`, `schedule`, `media`, `media_url`, `media_list`, `media_update`; plus kinds, site name/description/language and byte limits. A client reads it once and shows only what the site can do.
+- **Discovery** (`GET /api/inkwire`) advertises `features`: `upsert`, `list`, `get`, `update`, `delete`, `terms`, `schedule`, `media`, `media_url`, `media_list`, `media_update`, `revisions`; plus kinds, site name/description/language and byte limits. A client reads it once and shows only what the site can do.
 - **Edit with concurrency:** `PATCH` takes any subset of fields with `ETag`/`If-Match` (`412 stale`); `seo` merges per key; `null` clears. Existing hand-written content shows up with `external_id: null` and is editable like anything else: an edit rewrites only the fields it changed, so a file's own frontmatter (`layout`, `heroImage`, `weight`...) and its spellings (`draft: true`, `date`, `description`) survive.
 - **Tags and categories**, filterable in `GET /api/content`, with `GET /api/terms` listing every tag and category the entries use and how many carry it.
 - **Scheduling:** `status: published` with a `published_at` in the future. A site that advertises `schedule` holds the entry back until then; clients show it as scheduled.
 - **Media library:** `POST /api/media` (file or URL), `GET /api/media` (search, paging), `PATCH /api/media/{id}` (alt text, title). Images only, never SVG.
+- **Undo:** every update, restore and delete first keeps the version it replaces (`GET /api/content/{id}/revisions`), and `POST /api/content/{id}/restore {revision}` puts any of them back, a deleted entry included. A restore is itself undoable.
 - **Read-only keys** (`key:ro` in `INKWIRE_API_KEYS`): can audit everything, get `403 forbidden` on any write.
 - **Slug**: omit it and the receiver generates and de-dupes one silently (never 409). Provide one that collides with a *different* entry's and you get `409 conflict`.
 - **Markdown is canonical.** Receivers render it to sanitized HTML server-side (`markdown-it`/`sanitize-html` in TS, `markdown`/`nh3` in Python): `<script>`, event handlers, and non-http(s) URI schemes are stripped or rejected everywhere, including `cover_image_url`/`canonical_url`.

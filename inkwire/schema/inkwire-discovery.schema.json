@@ -63,6 +63,11 @@
         "media_bytes": {
           "type": "integer",
           "minimum": 1
+        },
+        "revisions": {
+          "description": "Past versions each entry keeps (feature revisions).",
+          "type": "integer",
+          "minimum": 1
         }
       }
     }

@@ -43,7 +43,7 @@ describe("inkwire-mcp against a full receiver", () => {
 
   test("offers one tool per feature the site advertises", async () => {
     const names = (await client.listTools()).tools.map((t) => t.name).sort();
-    assert.deepEqual(names, ["create", "delete", "get", "list", "list_images", "site", "terms", "update", "update_image", "upload_image"]);
+    assert.deepEqual(names, ["create", "delete", "get", "history", "list", "list_images", "restore", "site", "terms", "update", "update_image", "upload_image"]);
     const create = (await client.listTools()).tools.find((t) => t.name === "create");
     assert.deepEqual(create.inputSchema.properties.kind.enum, ["post", "page"], "kinds come from discovery");
   });
@@ -80,6 +80,42 @@ describe("inkwire-mcp against a full receiver", () => {
 
     assert.equal((await call(client, "delete", { id })).error, false);
     assert.match((await call(client, "get", { id })).body, /^not_found/);
+  });
+
+  test("undo: preview the restore, apply it, undo the undo; a deleted entry comes back", async () => {
+    const { id } = (await call(client, "create", { title: "About", markdown: "# About\n\nWe started in 2019.\n", kind: "page", seo: { description: "Since 2019" } })).json;
+    const changed = await call(client, "update", { id, edits: [{ find: "in 2019", replace: "in 2020" }], seo: { description: "Since 2020" } });
+    assert.match(changed.json.undo, /restore/);
+
+    const hist = await call(client, "history", { id });
+    assert.equal(hist.json.items.length, 1);
+    assert.equal(hist.json.items[0].replaced_by, "update");
+
+    const preview = await call(client, "restore", { id, dry_run: true });
+    assert.equal(preview.error, false, preview.body);
+    assert.deepEqual(preview.json.changes.markdown, { lines_removed: ["We started in 2020."], lines_back: ["We started in 2019."] });
+    assert.deepEqual(preview.json.changes["seo.description"], { before: "Since 2020", after: "Since 2019" });
+    assert.match((await call(client, "get", { id })).json.markdown, /2020/, "a dry run writes nothing");
+
+    const undone = await call(client, "restore", { id });
+    assert.equal(undone.error, false, undone.body);
+    const now = (await call(client, "get", { id })).json;
+    assert.match(now.markdown, /in 2019/);
+    assert.equal(now.seo.description, "Since 2019");
+
+    await call(client, "restore", { id });
+    assert.match((await call(client, "get", { id })).json.markdown, /in 2020/, "undo the undo");
+
+    const old = (await call(client, "history", { id })).json.items.at(-1).revision;
+    assert.match((await call(client, "history", { id, revision: old })).json.entry.markdown, /2019/, "read one version in full");
+
+    await call(client, "delete", { id });
+    assert.deepEqual((await call(client, "restore", { id, dry_run: true })).json.changes, { deleted: { before: true, after: false } });
+    assert.equal((await call(client, "restore", { id })).error, false);
+    assert.match((await call(client, "get", { id })).json.markdown, /in 2020/, "back as it was when deleted");
+
+    assert.match((await call(ro, "restore", { id, revision: old })).body, /^forbidden/);
+    assert.match((await call(client, "restore", { id, revision: "nope" })).body, /^not_found: .*call history/);
   });
 
   test("a future published_at schedules only where the site says it can", async () => {

@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SELF = JSON.parse(readFileSync(path.join(HERE, "package.json"), "utf8"));
-const DEFAULT_CORE_SPEC = "^1.0.0";
+const DEFAULT_CORE_SPEC = "^1.1.0";
 const INSTALL_URL = "https://github.com/dahoai/inkwire/blob/master/INSTALL.md";
 
 const HELP = `create-inkwire ${SELF.version}

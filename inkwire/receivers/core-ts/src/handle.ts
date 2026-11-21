@@ -1,12 +1,13 @@
+import { randomBytes } from "node:crypto";
 import { type ApiKey, authorize, requireWrite } from "./auth.js";
 import { InkwireError } from "./errors.js";
 import { withLock } from "./lock.js";
 import { assertImage, parseMultipart, safeFilename } from "./media.js";
 import { renderMarkdown, slugify } from "./render.js";
-import { ContentInput, MediaPatchSchema, MediaUrlInput, PatchSchema } from "./schema.js";
+import { ContentInput, MediaPatchSchema, MediaUrlInput, PatchSchema, RestoreInput } from "./schema.js";
 import { cleanOverrides, effectiveSeo, mergeOverrides } from "./seo.js";
 import { pageMedia } from "./list.js";
-import type { ContentStore, SaveEntry, StoredContent, StoredMedia } from "./store.js";
+import type { ContentStore, SaveEntry, StoredContent, StoredMedia, StoredRevision } from "./store.js";
 
 export const INKWIRE_VERSION = "1";
 export const MAX_PAGE = 100;
@@ -23,7 +24,8 @@ export interface InkwireConfig {
   site: { name: string; url: string; description?: string; language?: string };
   /** The kinds this receiver holds. */
   kinds: string[];
-  limits?: { markdown_bytes?: number; media_bytes?: number };
+  /** `revisions`: how many past versions an entry keeps (default 50), when the store keeps them. */
+  limits?: { markdown_bytes?: number; media_bytes?: number; revisions?: number };
   /** What discovery advertises; derived from the store and this config when omitted. `upsert` is always added. */
   features?: string[];
   /**
@@ -147,6 +149,39 @@ function full(e: StoredContent) {
 
 const etagHeader = (e: StoredContent) => ({ ETag: quote(e.etag) });
 
+// --- Revisions: every write that replaces an entry (update, restore, delete) first keeps the version it
+// replaces, so the first edit of a page that predates Inkwire is undoable too.
+
+const DEFAULT_KEEP_REVISIONS = 50;
+const hasRevisions = (s: ContentStore) => Boolean(s.saveRevision && s.listRevisions && s.moveRevisions);
+const keepOf = (config?: InkwireConfig) => Math.max(1, Math.floor(config?.limits?.revisions ?? DEFAULT_KEEP_REVISIONS));
+
+async function keepRevision(store: ContentStore, scope: string, entry: StoredContent, by: StoredRevision["replaced_by"], config?: InkwireConfig) {
+  if (!hasRevisions(store)) return;
+  const { key: _key, ...was } = entry;
+  const revision = `${Date.now().toString(36)}${randomBytes(4).toString("hex")}`;
+  await store.saveRevision!(scope, entry.id, { revision, created_at: new Date().toISOString(), replaced_by: by, entry: was }, keepOf(config));
+}
+
+/** A store whose ids follow the slug or kind moved the entry: its history goes with it. */
+async function followMove(store: ContentStore, scope: string, fromId: string, toId: string) {
+  if (fromId !== toId && hasRevisions(store)) await store.moveRevisions!(scope, fromId, toId);
+}
+
+function requireRevisions(store: ContentStore) {
+  if (!hasRevisions(store)) throw new InkwireError("not_found", "this receiver keeps no revisions");
+}
+
+const revisionSummary = (r: StoredRevision) => ({
+  revision: r.revision,
+  created_at: r.created_at,
+  replaced_by: r.replaced_by,
+  kind: r.entry.kind,
+  slug: r.entry.slug,
+  title: r.entry.title,
+  status: r.entry.status,
+});
+
 function requireKind(config: InkwireConfig, kind: string) {
   if (!config.kinds.includes(kind)) {
     throw new InkwireError("invalid_payload", `kind "${kind}" is not held by this receiver (it holds: ${config.kinds.join(", ")})`);
@@ -249,7 +284,9 @@ export function handleUpsert({ authHeader, rawBody, keys, store, config }: Upser
         updated_at: now,
         version: (existing?.version ?? 0) + 1,
       };
+      if (existing) await keepRevision(store, scope, existing, "update", config);
       const saved = await store.save(scope, entry);
+      if (existing) await followMove(store, scope, existing.id, saved.id);
       return ok(
         {
           id: saved.id,
@@ -382,7 +419,9 @@ export function handlePatch({ authHeader, id, rawBody, ifMatchHeader, keys, stor
         const v = f in patch ? (patch as Record<string, unknown>)[f] : (current as unknown as Record<string, unknown>)[f];
         if (v !== null && v !== undefined) (next as unknown as Record<string, unknown>)[f] = v;
       }
+      await keepRevision(store, scope, current, "update", config);
       const saved = await store.save(scope, next);
+      await followMove(store, scope, current.id, saved.id);
       return ok(full(saved), etagHeader(saved));
     });
   });
@@ -397,18 +436,116 @@ export interface DeleteArgs {
   ifMatchHeader?: string | null;
   keys: ApiKey[];
   store: ContentStore;
+  /** For `limits.revisions` (how many past versions to keep). */
+  config?: InkwireConfig;
 }
 
-export function handleDelete({ authHeader, id, ifMatchHeader, keys, store }: DeleteArgs): Promise<HandlerResult> {
+export function handleDelete({ authHeader, id, ifMatchHeader, keys, store, config }: DeleteArgs): Promise<HandlerResult> {
   return guarded(async () => {
     const key = authedWrite(authHeader, keys);
     return withLock(key.scope, async () => {
       const current = await store.get(key.scope, id);
       if (!current) throw new InkwireError("not_found", `no entry with id "${id}"`);
       checkIfMatch(ifMatchHeader, current);
+      // Kept first: a deleted entry stays restorable from its history.
+      await keepRevision(store, key.scope, current, "delete", config);
       const removed = await store.remove(key.scope, current.id);
       if (!removed) throw new InkwireError("not_found", `no entry with id "${id}"`);
       return ok({ id: current.id, deleted: true });
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// GET /api/content/{id}/revisions, GET /api/content/{id}/revisions/{revision}  (feature `revisions`)
+
+export interface RevisionsArgs {
+  authHeader: string | null | undefined;
+  id: string;
+  keys: ApiKey[];
+  store: ContentStore;
+}
+
+/** The entry's past versions, newest first. Works for a deleted entry too (that is how it is restored). */
+export function handleRevisions({ authHeader, id, keys, store }: RevisionsArgs): Promise<HandlerResult> {
+  return guarded(async () => {
+    const key = authorize(authHeader, keys);
+    requireRevisions(store);
+    const items = await store.listRevisions!(key.scope, id);
+    if (items.length === 0 && !(await store.get(key.scope, id))) throw new InkwireError("not_found", `no entry with id "${id}"`);
+    return ok({ items: items.map(revisionSummary) });
+  });
+}
+
+export interface RevisionArgs extends RevisionsArgs {
+  revision: string;
+}
+
+/** One past version in full, in the same shape as GET /api/content/{id}. */
+export function handleRevision({ authHeader, id, revision, keys, store }: RevisionArgs): Promise<HandlerResult> {
+  return guarded(async () => {
+    const key = authorize(authHeader, keys);
+    requireRevisions(store);
+    const r = (await store.listRevisions!(key.scope, id)).find((x) => x.revision === revision);
+    if (!r) throw new InkwireError("not_found", `no revision "${revision}" of entry "${id}"`);
+    return ok({ ...revisionSummary(r), entry: full({ ...r.entry, key: key.scope }) });
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// POST /api/content/{id}/restore  (feature `revisions`)
+
+export interface RestoreArgs {
+  authHeader: string | null | undefined;
+  id: string;
+  rawBody: string | Buffer;
+  ifMatchHeader?: string | null;
+  keys: ApiKey[];
+  store: ContentStore;
+  config: InkwireConfig;
+}
+
+/**
+ * Makes the entry what it was at `revision` (a new write: the version it replaces is kept, so a restore
+ * is itself undoable). Restores a deleted entry. `If-Match` is checked against the current entry.
+ */
+export function handleRestore({ authHeader, id, rawBody, ifMatchHeader, keys, store, config }: RestoreArgs): Promise<HandlerResult> {
+  return guarded(async () => {
+    const key = authedWrite(authHeader, keys);
+    requireRevisions(store);
+    const { revision } = validate(RestoreInput, parseJson(rawBody));
+    const scope = key.scope;
+
+    return withLock(scope, async () => {
+      const current = await store.get(scope, id);
+      if (current) checkIfMatch(ifMatchHeader, current);
+      const r = (await store.listRevisions!(scope, id)).find((x) => x.revision === revision);
+      if (!r) throw new InkwireError("not_found", `no revision "${revision}" of entry "${id}"`);
+      const was = r.entry;
+      requireKind(config, was.kind);
+      await assertSlugFree(store, scope, was.kind, was.slug, current?.id ?? id);
+      if (was.external_id !== null) {
+        const other = (await store.list(scope, { kind: was.kind, external_id: was.external_id, limit: 1 })).items[0];
+        if (other && other.id !== (current?.id ?? id)) {
+          throw new InkwireError("conflict", `external_id "${was.external_id}" is now used by another entry (${other.id})`);
+        }
+      }
+
+      if (current) await keepRevision(store, scope, current, "restore", config);
+      const { id: _id, url: _url, etag: _etag, version, updated_at: _updated, ...fields } = was;
+      const selfId = current?.id ?? id;
+      const next: SaveEntry = {
+        ...fields,
+        id: selfId,
+        key: scope,
+        // Rendered again: the sanitizer in force now applies, not the one at the time.
+        html: renderMarkdown(was.markdown),
+        updated_at: new Date().toISOString(),
+        version: Math.max(current?.version ?? 0, version) + 1,
+      };
+      const saved = await store.save(scope, next);
+      await followMove(store, scope, selfId, saved.id);
+      return ok(full(saved), etagHeader(saved));
     });
   });
 }
@@ -612,14 +749,16 @@ export function discoveryBody(config: InkwireConfig, store?: ContentStore) {
     ...(store?.saveMedia && config.fetchMedia ? ["media_url"] : []),
     ...(store?.listMedia ? ["media_list"] : []),
     ...(store?.updateMedia ? ["media_update"] : []),
+    ...(store && hasRevisions(store) ? ["revisions"] : []),
   ];
   const features = [...new Set(["upsert", ...(config.features ?? derived)])];
+  const { revisions: _keep, ...limits } = limitsOf(config);
   return {
     inkwire: 1,
     site: config.site,
     features,
     kinds: config.kinds,
-    limits: limitsOf(config),
+    limits: features.includes("revisions") ? { ...limits, revisions: keepOf(config) } : limits,
   };
 }
 

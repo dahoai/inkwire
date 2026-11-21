@@ -41,6 +41,8 @@ At startup it reads the site's discovery (`GET /api/inkwire`) and offers only wh
 | `create` | `upsert` | a new post or page, as a draft unless told to publish |
 | `update` | `get` + `update` | change text with exact `{find, replace}` edits, or any field; `dry_run` returns the before and after without writing |
 | `delete` | `delete` | take an entry off the site |
+| `history` | `revisions` | an entry's earlier versions, newest first (a deleted entry's too), or one in full |
+| `restore` | `revisions` | undo: put back the version before the last change (or any earlier one), or bring back a deleted entry; `dry_run` shows what comes back |
 | `terms` | `terms` | the tags and categories already in use |
 | `upload_image` | `media` | an image from a file on your computer (or a public URL, with `media_url`) |
 | `list_images` | `media_list` | the media library, with alt text |
@@ -49,6 +51,7 @@ At startup it reads the site's discovery (`GET /api/inkwire`) and offers only wh
 ## Safe by default
 
 - **Preview, then apply.** The agent is told to run every change with `dry_run` first and show you the before and after. The preview of a text edit is the edit itself, not the whole page twice.
+- **Undo.** On a site with `revisions`, every change and every delete keeps the version it replaced. *"Undo that"* is one `restore`, previewed first like any change, and a restore is itself undoable.
 - **No silent overwrites.** `update` reads the entry and writes with its `ETag`: if someone changed the page in between, the write is refused (`stale`) and the agent reads it again.
 - **Exact edits.** Each `find` must occur exactly once in the page, or nothing changes.
 - **Drafts first.** New entries are drafts; a future `published_at` is refused on a site that cannot schedule, instead of publishing at once.

@@ -31,6 +31,9 @@ result = publish("https://blog.example.com", "your-api-key", {
 | `get(base_url, key, id)` | `GET /api/content/{id}`: `(entry, etag)` |
 | `update(base_url, key, id, patch, if_match=)` | `PATCH /api/content/{id}`: `(entry, etag)`; `None` clears an optional field |
 | `remove(base_url, key, id, if_match=)` | `DELETE /api/content/{id}` |
+| `revisions(base_url, key, id)` | `GET /api/content/{id}/revisions`: `{"items": [...]}`, newest first |
+| `revision(base_url, key, id, rev)` | `GET /api/content/{id}/revisions/{rev}`: the summary + `entry` |
+| `restore(base_url, key, id, rev, if_match=)` | `POST /api/content/{id}/restore`: `(entry, etag)` (undo; also undeletes) |
 | `terms(base_url, key, kind=, search=, limit=)` | `GET /api/terms`: `{"items": [{kind, name, slug, count}]}` |
 | `list_media(base_url, key, search=, limit=, cursor=)` | `GET /api/media`: `{"items": [...], "next_cursor": ...}` |
 | `update_media(base_url, key, id, alt=, title=)` | `PATCH /api/media/{id}` |

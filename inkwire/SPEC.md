@@ -151,14 +151,14 @@ auth as everything else.
 {
   "inkwire": 1,
   "site": { "name": "Acme", "url": "https://acme.com", "description": "Acme's blog", "language": "en" },
-  "features": ["upsert", "list", "get", "update", "delete", "terms", "schedule", "media", "media_url", "media_list", "media_update"],
+  "features": ["upsert", "list", "get", "update", "delete", "terms", "schedule", "media", "media_url", "media_list", "media_update", "revisions"],
   "kinds": ["post", "page"],
-  "limits": { "markdown_bytes": 1000000, "media_bytes": 10000000 }
+  "limits": { "markdown_bytes": 1000000, "media_bytes": 10000000, "revisions": 50 }
 }
 ```
 
 `upsert` is always present. `site.description` and `site.language` (a BCP 47 tag) are optional. `kinds` lists what the receiver holds (publishers must not send
-other kinds). `limits` are ceilings in bytes; a request over one answers `413 too_large`. A receiver without this endpoint answers
+other kinds). `limits` are ceilings in bytes (a request over one answers `413 too_large`), except `revisions`: how many past versions each entry keeps. A receiver without this endpoint answers
 404 and clients treat it as `features: ["upsert"]`, `kinds: ["post"]`, no limits.
 
 ### Reading: `GET /api/content`, `GET /api/content/{id}`  (features `list`, `get`)
@@ -250,6 +250,36 @@ ties by `id`), with the same `limit` and `cursor` rules as content:
 
 `search` matches the alt text, title and filename. `PATCH /api/media/{id}` takes `{ "alt"?: string | null, "title"?: string | null }`
 (at least one; `null` clears) and answers with the media item. Unknown id: `404 not_found`.
+
+### Undo: revisions and restore  (feature `revisions`)
+
+Every write that replaces an entry (an upsert of an existing `external_id`, a `PATCH`, a restore,
+a `DELETE`) first keeps the version it replaces. So the first change an agent makes to a page the
+site had long before Inkwire is undoable, and so is a delete. A receiver keeps at least the newest
+`limits.revisions` versions of each entry (the oldest go first) and keeps them after a delete.
+
+`GET /api/content/{id}/revisions` lists them, newest first:
+
+```json
+{ "items": [ { "revision": "opaque", "created_at": "2026-11-20T10:00:00.000Z", "replaced_by": "update",
+               "kind": "page", "slug": "pricing", "title": "Pricing", "status": "published" } ] }
+```
+
+`created_at` is when that version was replaced, `replaced_by` what replaced it (`update`,
+`restore` or `delete`). The other fields are the version's own. An entry with no past versions
+has `items: []`; an id that is neither an entry nor in any history is `404 not_found`.
+
+`GET /api/content/{id}/revisions/{revision}` returns one version in full: the summary plus `entry`,
+the entry as it was, in the shape of `GET /api/content/{id}` (with its effective `seo`).
+
+`POST /api/content/{id}/restore` with `{ "revision": "..." }` makes the entry what it was at that
+version: every stored field, its `kind` and `slug` included. It is a new write, not a rewind:
+the version it replaces is kept first, so a restore is undone the same way. It brings back a
+deleted entry under its old `id` (a receiver whose ids follow the slug moves the history with
+the entry). It honours `If-Match` against the current entry, refuses a version whose `kind` the
+receiver no longer holds (`400`), and answers `409 conflict` when another entry has since taken its
+`slug` or `external_id`. A read-only key may list and read revisions, never restore. The response
+is the full entry with its new `ETag`.
 
 
 ### Errors

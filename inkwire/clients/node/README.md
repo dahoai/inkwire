@@ -48,6 +48,9 @@ Features a receiver can advertise in `capabilities().features`: `upsert` (always
 | `get(baseUrl, apiKey, id, opts?)` | `GET /api/content/{id}` -> `{ content, etag }` |
 | `update(baseUrl, apiKey, id, patch, opts?)` | `PATCH /api/content/{id}` -> `{ content, etag }` |
 | `remove(baseUrl, apiKey, id, opts?)` | `DELETE /api/content/{id}` |
+| `revisions(baseUrl, apiKey, id, opts?)` | `GET /api/content/{id}/revisions` -> `{ items }`, newest first |
+| `revision(baseUrl, apiKey, id, rev, opts?)` | `GET /api/content/{id}/revisions/{rev}` -> the summary + `entry` |
+| `restore(baseUrl, apiKey, id, rev, opts?)` | `POST /api/content/{id}/restore` -> `{ content, etag }` (undo; also undeletes) |
 | `terms(baseUrl, apiKey, query?, opts?)` | `GET /api/terms` -> `{ items: { kind, name, slug, count }[] }` |
 | `uploadMedia(baseUrl, apiKey, media, opts?)` | `POST /api/media` -> `MediaItem` |
 | `listMedia(baseUrl, apiKey, query?, opts?)` | `GET /api/media` -> `{ items, next_cursor }` |

@@ -72,13 +72,14 @@ export interface Content extends ContentSummary {
 export interface Capabilities {
   /**
    * What the receiver implements. `upsert` is always present. Known: `upsert`, `list`, `get`, `update`,
-   * `delete`, `terms`, `schedule`, `media`, `media_list`, `media_update` (an open set).
+   * `delete`, `terms`, `schedule`, `media`, `media_url`, `media_list`, `media_update`, `revisions` (an open set).
    */
   features: string[];
   /** The kinds the receiver holds; never send others. */
   kinds: string[];
   /** Ceilings in bytes; a request over one answers `too_large`. */
-  limits: { markdown_bytes?: number; media_bytes?: number };
+  /** `revisions` is how many past versions each entry keeps (feature `revisions`). */
+  limits: { markdown_bytes?: number; media_bytes?: number; revisions?: number };
   /** The protocol version; absent when the receiver has no discovery endpoint. */
   inkwire?: number;
   /** About the site; absent when the receiver has no discovery endpoint. `language` is a BCP 47 tag. */
@@ -96,6 +97,17 @@ export interface ListResult { items: ContentSummary[]; next_cursor: string | nul
 /** An entry with the `ETag` it was read at; pass `etag` back as `opts.ifMatch` to edit safely. */
 export interface ContentWithEtag { content: Content; etag: string | null }
 export interface DeleteResult { id: string; deleted: boolean }
+
+/** A past version of an entry: what an update, a restore or a delete replaced. */
+export interface RevisionSummary {
+  revision: string;
+  /** When this version was replaced. */
+  created_at: string;
+  replaced_by: "update" | "restore" | "delete";
+  kind: string; slug: string; title: string; status: "draft" | "published";
+}
+export interface RevisionsResult { items: RevisionSummary[] }
+export interface Revision extends RevisionSummary { entry: Content }
 
 export interface TermsQuery {
   kind?: "tag" | "category";
@@ -250,6 +262,33 @@ export async function remove(baseUrl: string, apiKey: string, id: string, opts: 
     headers: opts.ifMatch ? { "if-match": opts.ifMatch } : undefined,
   }, opts);
   return json<DeleteResult>(res);
+}
+
+/** GET /api/content/{id}/revisions (feature `revisions`): its past versions, newest first. Works after a delete. */
+export async function revisions(baseUrl: string, apiKey: string, id: string, opts: RequestOptions = {}): Promise<RevisionsResult> {
+  const res = await call(baseUrl, apiKey, { method: "GET", path: `${idPath(id)}/revisions` }, opts);
+  return json<RevisionsResult>(res);
+}
+
+/** GET /api/content/{id}/revisions/{revision} (feature `revisions`): one past version in full. */
+export async function revision(baseUrl: string, apiKey: string, id: string, rev: string, opts: RequestOptions = {}): Promise<Revision> {
+  const res = await call(baseUrl, apiKey, { method: "GET", path: `${idPath(id)}/revisions/${encodeURIComponent(rev)}` }, opts);
+  return json<Revision>(res);
+}
+
+/**
+ * POST /api/content/{id}/restore (feature `revisions`): make the entry what it was at `rev` (also brings back a
+ * deleted one). The version it replaces is kept, so a restore is undoable too. Returns the entry and its new ETag.
+ */
+export async function restore(
+  baseUrl: string, apiKey: string, id: string, rev: string, opts: WriteOptions = {},
+): Promise<ContentWithEtag> {
+  const res = await call(baseUrl, apiKey, {
+    method: "POST", path: `${idPath(id)}/restore`,
+    headers: { ...JSON_HEADERS, ...(opts.ifMatch ? { "if-match": opts.ifMatch } : {}) },
+    body: JSON.stringify({ revision: rev }),
+  }, opts);
+  return { content: await json<Content>(res), etag: res.headers.get("etag") };
 }
 
 /** GET /api/terms (feature `terms`): the tags and categories entries use, most used first. */

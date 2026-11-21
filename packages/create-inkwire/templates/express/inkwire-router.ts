@@ -14,6 +14,9 @@ import {
   handleMediaUpdate,
   handleTerms,
   handlePatch,
+  handleRestore,
+  handleRevision,
+  handleRevisions,
   handleUpsert,
 } from "inkwire-receiver-core";
 
@@ -344,7 +347,12 @@ export function createInkwireRouter(env: NodeJS.ProcessEnv = process.env) {
   router.patch("/api/content/:id", jsonBody, run((req) =>
     handlePatch({ authHeader: authHeader(req), id: idOf(req), rawBody: bodyOf(req), ifMatchHeader: req.header("if-match"), keys, store, config })));
   router.delete("/api/content/:id", run((req) =>
-    handleDelete({ authHeader: authHeader(req), id: idOf(req), ifMatchHeader: req.header("if-match"), keys, store })));
+    handleDelete({ authHeader: authHeader(req), id: idOf(req), ifMatchHeader: req.header("if-match"), keys, store, config })));
+  router.get("/api/content/:id/revisions", run((req) => handleRevisions({ authHeader: authHeader(req), id: idOf(req), keys, store })));
+  router.get("/api/content/:id/revisions/:revision", run((req) =>
+    handleRevision({ authHeader: authHeader(req), id: idOf(req), revision: req.params.revision as string, keys, store })));
+  router.post("/api/content/:id/restore", jsonBody, run((req) =>
+    handleRestore({ authHeader: authHeader(req), id: idOf(req), rawBody: bodyOf(req), ifMatchHeader: req.header("if-match"), keys, store, config })));
   router.get("/api/terms", run((req) => handleTerms({ authHeader: authHeader(req), query: new URL(req.originalUrl, "http://x").searchParams, keys, store })));
   router.get("/api/media", run((req) => handleMediaList({ authHeader: authHeader(req), query: new URL(req.originalUrl, "http://x").searchParams, keys, store })));
   router.patch("/api/media/:id", jsonBody, run((req) => handleMediaUpdate({ authHeader: authHeader(req), id: idOf(req), rawBody: bodyOf(req), keys, store })));

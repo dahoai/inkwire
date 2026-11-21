@@ -5,7 +5,7 @@ import { InkwireError } from "../errors.js";
 import { KIND_RE, RESERVED_KINDS, SLUG_FILE_RE, idFor, parseEntryFile, parseId, serializeEntry, updateEntryFile } from "../files.js";
 import { matches, pageMedia, pageOf, recencyKey } from "../list.js";
 import { MEDIA_FILE_RE, MEDIA_ID_RE, META_SUFFIX, type MediaMeta, parseMeta, patchMeta, serializeMeta, toMedia } from "../media-meta.js";
-import type { ContentStore, ListFilter, ListResult, MediaInput, MediaListFilter, MediaListResult, SaveEntry, StoredContent, StoredMedia } from "../store.js";
+import type { ContentStore, ListFilter, ListResult, MediaInput, MediaListFilter, MediaListResult, SaveEntry, StoredContent, StoredMedia, StoredRevision } from "../store.js";
 
 export interface FileStoreOptions {
   /** The content directory: `<root>/<kind>/<slug>.md`. */
@@ -223,5 +223,43 @@ export class FileStore implements ContentStore {
     );
     await this.writeAtomic(path.join(dir, `${name}${META_SUFFIX}`), serializeMeta(meta));
     return toMedia(id, cur.url, meta);
+  }
+
+  // Revisions: one JSON file per entry id under <root>/.revisions (hidden: never a kind, never served).
+
+  private historyFile(id: string): string | null {
+    const p = parseId(id);
+    return p ? path.join(this.root, ".revisions", `${idFor(p.kind, p.slug)}.json`) : null;
+  }
+
+  async listRevisions(_key: string, id: string): Promise<StoredRevision[]> {
+    const file = this.historyFile(id);
+    if (!file) return [];
+    try {
+      const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
+      return Array.isArray(parsed) ? (parsed as StoredRevision[]) : [];
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw e;
+    }
+  }
+
+  async saveRevision(key: string, id: string, revision: StoredRevision, keep: number) {
+    const file = this.historyFile(id);
+    if (!file) return;
+    const next = [revision, ...(await this.listRevisions(key, id))].slice(0, keep);
+    await mkdir(path.dirname(file), { recursive: true });
+    await this.writeAtomic(file, JSON.stringify(next));
+  }
+
+  async moveRevisions(key: string, fromId: string, toId: string) {
+    const from = this.historyFile(fromId);
+    const to = this.historyFile(toId);
+    if (!from || !to || from === to) return;
+    const moved = await this.listRevisions(key, fromId);
+    if (moved.length === 0) return;
+    await mkdir(path.dirname(to), { recursive: true });
+    await this.writeAtomic(to, JSON.stringify([...moved, ...(await this.listRevisions(key, toId))]));
+    await unlink(from).catch(() => {});
   }
 }

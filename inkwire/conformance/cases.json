@@ -1594,5 +1594,243 @@
    "status": 403,
    "errorCode": "forbidden"
   }
+ },
+ {
+  "name": "revisions list the version an update replaced",
+  "feature": "revisions",
+  "requiresFeatures": [
+   "update"
+  ],
+  "setup": [
+   {
+    "body": {
+     "external_id": "{{run}}-rv-1",
+     "title": "Before",
+     "markdown": "original body"
+    },
+    "captureBodyAs": "rv1"
+   },
+   {
+    "method": "PATCH",
+    "endpoint": "/api/content/{{rv1.id}}",
+    "body": {
+     "title": "After",
+     "markdown": "changed body"
+    }
+   }
+  ],
+  "method": "GET",
+  "endpoint": "/api/content/{{rv1.id}}/revisions",
+  "captureBodyAs": "rvh",
+  "expect": {
+   "status": 200,
+   "path": {
+    "items.0.title": "Before",
+    "items.0.replaced_by": "update",
+    "items.0.revision": "present",
+    "items.0.created_at": "present"
+   }
+  }
+ },
+ {
+  "name": "one revision in full, with its effective seo",
+  "feature": "revisions",
+  "requiresFeatures": [
+   "update"
+  ],
+  "method": "GET",
+  "endpoint": "/api/content/{{rv1.id}}/revisions/{{rvh.items.0.revision}}",
+  "expect": {
+   "status": 200,
+   "path": {
+    "entry.markdown": "original body",
+    "entry.title": "Before",
+    "entry.seo.title": "present"
+   }
+  }
+ },
+ {
+  "name": "restore with a stale If-Match -> 412",
+  "feature": "revisions",
+  "requiresFeatures": [
+   "update",
+   "get"
+  ],
+  "setup": [
+   {
+    "method": "GET",
+    "endpoint": "/api/content/{{rv1.id}}",
+    "captureEtagAs": "rvetag"
+   },
+   {
+    "method": "PATCH",
+    "endpoint": "/api/content/{{rv1.id}}",
+    "body": {
+     "excerpt": "moved on"
+    }
+   }
+  ],
+  "method": "POST",
+  "endpoint": "/api/content/{{rv1.id}}/restore",
+  "headers": {
+   "if-match": "{{etag:rvetag}}"
+  },
+  "body": {
+   "revision": "{{rvh.items.0.revision}}"
+  },
+  "expect": {
+   "status": 412,
+   "errorCode": "stale"
+  }
+ },
+ {
+  "name": "restore puts the old version back, with a new ETag",
+  "feature": "revisions",
+  "requiresFeatures": [
+   "update"
+  ],
+  "method": "POST",
+  "endpoint": "/api/content/{{rv1.id}}/restore",
+  "body": {
+   "revision": "{{rvh.items.0.revision}}"
+  },
+  "expect": {
+   "status": 200,
+   "hasEtag": true,
+   "path": {
+    "title": "Before",
+    "markdown": "original body",
+    "id": "{{rv1.id}}"
+   }
+  }
+ },
+ {
+  "name": "the restore is itself undoable",
+  "feature": "revisions",
+  "requiresFeatures": [
+   "update"
+  ],
+  "method": "GET",
+  "endpoint": "/api/content/{{rv1.id}}/revisions",
+  "expect": {
+   "status": 200,
+   "path": {
+    "items.0.replaced_by": "restore",
+    "items.0.title": "After"
+   }
+  }
+ },
+ {
+  "name": "restore an unknown revision -> 404",
+  "feature": "revisions",
+  "requiresFeatures": [
+   "update"
+  ],
+  "method": "POST",
+  "endpoint": "/api/content/{{rv1.id}}/restore",
+  "body": {
+   "revision": "no-such-revision"
+  },
+  "expect": {
+   "status": 404,
+   "errorCode": "not_found"
+  }
+ },
+ {
+  "name": "restore without a revision -> 400",
+  "feature": "revisions",
+  "requiresFeatures": [
+   "update"
+  ],
+  "method": "POST",
+  "endpoint": "/api/content/{{rv1.id}}/restore",
+  "body": {},
+  "expect": {
+   "status": 400,
+   "errorCode": "invalid_payload"
+  }
+ },
+ {
+  "name": "read-only key: reads revisions, cannot restore",
+  "feature": "revisions",
+  "requiresFeatures": [
+   "update"
+  ],
+  "auth": "ro",
+  "method": "POST",
+  "endpoint": "/api/content/{{rv1.id}}/restore",
+  "body": {
+   "revision": "{{rvh.items.0.revision}}"
+  },
+  "expect": {
+   "status": 403,
+   "errorCode": "forbidden"
+  }
+ },
+ {
+  "name": "a deleted entry can be restored under its id",
+  "feature": "revisions",
+  "requiresFeatures": [
+   "delete",
+   "get"
+  ],
+  "setup": [
+   {
+    "body": {
+     "external_id": "{{run}}-rv-2",
+     "title": "Deleted by mistake",
+     "markdown": "keep me"
+    },
+    "captureBodyAs": "rv2"
+   },
+   {
+    "method": "DELETE",
+    "endpoint": "/api/content/{{rv2.id}}"
+   },
+   {
+    "method": "GET",
+    "endpoint": "/api/content/{{rv2.id}}/revisions",
+    "captureBodyAs": "rv2h"
+   }
+  ],
+  "method": "POST",
+  "endpoint": "/api/content/{{rv2.id}}/restore",
+  "body": {
+   "revision": "{{rv2h.items.0.revision}}"
+  },
+  "expect": {
+   "status": 200,
+   "path": {
+    "id": "{{rv2.id}}",
+    "title": "Deleted by mistake",
+    "markdown": "keep me"
+   }
+  }
+ },
+ {
+  "name": "the restored entry reads back",
+  "feature": "get",
+  "requiresFeatures": [
+   "revisions",
+   "delete"
+  ],
+  "method": "GET",
+  "endpoint": "/api/content/{{rv2.id}}",
+  "expect": {
+   "status": 200,
+   "path": {
+    "markdown": "keep me"
+   }
+  }
+ },
+ {
+  "name": "revisions of an unknown id -> 404",
+  "feature": "revisions",
+  "method": "GET",
+  "endpoint": "/api/content/no-such-id-{{run}}/revisions",
+  "expect": {
+   "status": 404,
+   "errorCode": "not_found"
+  }
  }
 ]

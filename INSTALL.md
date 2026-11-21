@@ -53,7 +53,7 @@ Check:
 
 ```bash
 curl -H "Authorization: Bearer <full key>" http://localhost:3000/api/inkwire
-# {"inkwire":1,"site":{...},"features":["upsert","list","get","update","delete","terms","media","media_url","media_list","media_update"],"kinds":["post","page"],"limits":{...}}
+# {"inkwire":1,"site":{...},"features":["upsert","list","get","update","delete","terms","media","media_url","media_list","media_update","revisions"],"kinds":["post","page"],"limits":{...}}
 ```
 
 ## 2. Render what gets published

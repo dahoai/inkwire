@@ -102,6 +102,20 @@ export interface MediaInput {
 }
 
 /**
+ * A past version of an entry: the state a write replaced (an update, a restore or a delete).
+ * Restoring it makes the entry that again. `entry` is the whole entry as it was.
+ */
+export interface StoredRevision {
+  /** Opaque, unique within the entry's history. */
+  revision: string;
+  /** When this version was replaced. */
+  created_at: string;
+  /** What replaced it. */
+  replaced_by: "update" | "restore" | "delete";
+  entry: Omit<StoredContent, "key">;
+}
+
+/**
  * The whole storage contract: four methods (plus optional media methods), every one scoped by `key` (the `ApiKey.scope`). Slug
  * conflicts and external_id lookups go through `list` with exact filters, so implement those
  * efficiently. `saveMedia` is optional: a store without it makes the receiver omit the `media`
@@ -117,4 +131,14 @@ export interface ContentStore {
   listMedia?(key: string, filter: MediaListFilter): Promise<MediaListResult>;
   /** `null` clears. Returns null for an unknown id. A store without it omits `media_update`. */
   updateMedia?(key: string, id: string, patch: { alt?: string | null; title?: string | null }): Promise<StoredMedia | null>;
+  /**
+   * Revisions (all three, or none: a store without them makes the receiver omit `revisions`). The
+   * history belongs to an entry id and outlives a delete, so a deleted entry can be restored.
+   * `saveRevision` adds one and keeps only the newest `keep`.
+   */
+  saveRevision?(key: string, id: string, revision: StoredRevision, keep: number): Promise<void>;
+  /** Newest first. An id with no history is an empty list. */
+  listRevisions?(key: string, id: string): Promise<StoredRevision[]>;
+  /** The entry's id changed (a slug or kind change in a store whose ids follow them): its history follows it. */
+  moveRevisions?(key: string, fromId: string, toId: string): Promise<void>;
 }

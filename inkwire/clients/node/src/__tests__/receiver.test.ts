@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  InkwireClientError, capabilities, edits, get, isScheduled, list, listMedia, publish, remove, terms, update, updateMedia, uploadMedia,
+  InkwireClientError, capabilities, edits, get, isScheduled, list, listMedia, publish, remove, restore, revision, revisions, terms, update, updateMedia, uploadMedia,
 } from "../index";
 
 interface Seen { method: string; url: string; headers: IncomingMessage["headers"]; body: Buffer }
@@ -229,6 +229,27 @@ describe("remove", () => {
     await expect(remove(base, "k", "x")).rejects.toMatchObject({ code: "not_found" });
     replies = [{ status: 412, json: { error: { code: "stale", message: "changed" } } }];
     await expect(remove(base, "k", "x", { ifMatch: '"old"' })).rejects.toMatchObject({ code: "stale" });
+  });
+});
+
+describe("revisions / revision / restore", () => {
+  const summary = { revision: "r1", created_at: "2026-01-02T00:00:00Z", replaced_by: "update", kind: "post", slug: "hello", title: "Hello", status: "published" };
+  it("GETs the history and one revision under the encoded id", async () => {
+    replies = [{ json: { items: [summary] } }, { json: { ...summary, entry: entry() } }];
+    expect((await revisions(base, "k", "post.a/b")).items[0]!.revision).toBe("r1");
+    expect((await revision(base, "k", "post.a/b", "r 1")).entry.title).toBe("Hello");
+    expect(seen.map((x) => [x.method, x.url])).toEqual([["GET", "/api/content/post.a%2Fb/revisions"], ["GET", "/api/content/post.a%2Fb/revisions/r%201"]]);
+  });
+  it("POSTs {revision} to restore with If-Match and returns the entry and its new ETag", async () => {
+    replies = [{ headers: { etag: '"v3"' }, json: entry({ title: "Back" }) }];
+    const r = await restore(base, "k", "post.hello", "r1", { ifMatch: '"v2"' });
+    expect([r.content.title, r.etag]).toEqual(["Back", '"v3"']);
+    expect([seen[0]!.method, seen[0]!.url, seen[0]!.headers["if-match"]]).toEqual(["POST", "/api/content/post.hello/restore", '"v2"']);
+    expect(sent()).toEqual({ revision: "r1" });
+  });
+  it("a stale restore surfaces as code stale", async () => {
+    replies = [{ status: 412, json: { error: { code: "stale", message: "changed" } } }];
+    await expect(restore(base, "k", "post.hello", "r1", { ifMatch: '"old"' })).rejects.toMatchObject({ code: "stale" });
   });
 });
 

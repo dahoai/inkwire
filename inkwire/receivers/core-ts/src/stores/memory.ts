@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { matches, pageMedia, pageOf, recencyKey } from "../list.js";
 import { patchMeta, toMedia } from "../media-meta.js";
-import type { ContentStore, ListFilter, ListResult, MediaInput, MediaListFilter, MediaListResult, SaveEntry, StoredContent, StoredMedia } from "../store.js";
+import type { ContentStore, ListFilter, ListResult, MediaInput, MediaListFilter, MediaListResult, SaveEntry, StoredContent, StoredMedia, StoredRevision } from "../store.js";
 
 export interface MemoryStoreOptions {
   /** Public address of an entry. Default `https://example.test/<kind>/<slug>`. */
@@ -13,6 +13,7 @@ export interface MemoryStoreOptions {
 export class MemoryStore implements ContentStore {
   private entries = new Map<string, Map<string, StoredContent>>();
   private media = new Map<string, Map<string, StoredMedia & { bytes: Buffer; contentType: string }>>();
+  private revisions = new Map<string, Map<string, StoredRevision[]>>();
   constructor(private opts: MemoryStoreOptions = {}) {}
 
   private scope(key: string) {
@@ -71,5 +72,28 @@ export class MemoryStore implements ContentStore {
     this.media.get(key)!.set(id, next);
     const { bytes: _b, contentType: _c, ...out } = next;
     return out;
+  }
+
+  private history(key: string) {
+    let m = this.revisions.get(key);
+    if (!m) this.revisions.set(key, (m = new Map()));
+    return m;
+  }
+
+  async saveRevision(key: string, id: string, revision: StoredRevision, keep: number) {
+    const h = this.history(key);
+    h.set(id, [structuredClone(revision), ...(h.get(id) ?? [])].slice(0, keep));
+  }
+
+  async listRevisions(key: string, id: string) {
+    return structuredClone(this.history(key).get(id) ?? []);
+  }
+
+  async moveRevisions(key: string, fromId: string, toId: string) {
+    const h = this.history(key);
+    const moved = h.get(fromId);
+    if (!moved) return;
+    h.set(toId, [...moved, ...(h.get(toId) ?? [])]);
+    h.delete(fromId);
   }
 }

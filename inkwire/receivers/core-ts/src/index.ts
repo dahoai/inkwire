@@ -9,6 +9,9 @@ export {
   handleMediaUpdate,
   handleTerms,
   handleDiscovery,
+  handleRevisions,
+  handleRevision,
+  handleRestore,
   discoveryBody,
   INKWIRE_VERSION,
 } from "./handle.js";
@@ -26,13 +29,16 @@ export type {
   MediaUpdateArgs,
   TermsArgs,
   DiscoveryArgs,
+  RevisionsArgs,
+  RevisionArgs,
+  RestoreArgs,
 } from "./handle.js";
 export { parseApiKeys, authorize, requireWrite, DEFAULT_SCOPE } from "./auth.js";
 export type { ApiKey } from "./auth.js";
 export { InkwireError } from "./errors.js";
 export type { InkwireCode } from "./errors.js";
 export { renderMarkdown, slugify, edits, ALLOWED_TAGS, ALLOWED_ATTRIBUTES, ALLOWED_SCHEMES } from "./render.js";
-export { ContentInput, PatchSchema, MediaPatchSchema } from "./schema.js";
+export { ContentInput, PatchSchema, MediaPatchSchema, RestoreInput } from "./schema.js";
 export { sniffImage, assertImage, parseMultipart, safeFilename } from "./media.js";
 export { effectiveSeo } from "./seo.js";
 export type {
@@ -49,6 +55,7 @@ export type {
   MediaInput,
   MediaListFilter,
   MediaListResult,
+  StoredRevision,
 } from "./store.js";
 export { matches, mediaMatches, pageMedia, pageOf, recencyKey, encodeCursor, decodeCursor } from "./list.js";
 export { MemoryStore } from "./stores/memory.js";

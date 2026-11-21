@@ -282,6 +282,41 @@ def remove(
     return res.json()
 
 
+def revisions(base_url: str, api_key: str, id: str, retries: int = 3) -> dict:
+    """GET /api/content/{id}/revisions (feature ``revisions``): past versions, newest first; works after a delete."""
+    quoted_id = urllib.parse.quote(id, safe="")
+    url = f"{base_url.rstrip('/')}/api/content/{quoted_id}/revisions"
+    res = _call("GET", url, headers={"authorization": f"Bearer {api_key}"}, retries=retries)
+    return res.json()
+
+
+def revision(base_url: str, api_key: str, id: str, rev: str, retries: int = 3) -> dict:
+    """GET /api/content/{id}/revisions/{rev} (feature ``revisions``): one past version, with ``entry`` in full."""
+    quoted_id = urllib.parse.quote(id, safe="")
+    quoted_rev = urllib.parse.quote(rev, safe="")
+    url = f"{base_url.rstrip('/')}/api/content/{quoted_id}/revisions/{quoted_rev}"
+    res = _call("GET", url, headers={"authorization": f"Bearer {api_key}"}, retries=retries)
+    return res.json()
+
+
+def restore(
+    base_url: str,
+    api_key: str,
+    id: str,
+    rev: str,
+    if_match: str | None = None,
+    retries: int = 3,
+) -> tuple[dict, str | None]:
+    """POST /api/content/{id}/restore (feature ``revisions``): put the entry back as it was at ``rev`` (also undeletes)."""
+    quoted_id = urllib.parse.quote(id, safe="")
+    url = f"{base_url.rstrip('/')}/api/content/{quoted_id}/restore"
+    headers = {"content-type": "application/json", "authorization": f"Bearer {api_key}"}
+    if if_match is not None:
+        headers["if-match"] = if_match
+    res = _call("POST", url, headers=headers, json={"revision": rev}, retries=retries)
+    return res.json(), res.headers.get("etag")
+
+
 def terms(
     base_url: str,
     api_key: str,
@@ -421,6 +456,9 @@ __all__ = [
     "get",
     "update",
     "remove",
+    "revisions",
+    "revision",
+    "restore",
     "terms",
     "list_media",
     "update_media",

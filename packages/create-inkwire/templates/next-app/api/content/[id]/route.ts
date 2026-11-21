@@ -33,6 +33,6 @@ export async function PATCH(req: Request, ctx: Ctx) {
 
 export async function DELETE(req: Request, ctx: Ctx) {
   const { id } = await ctx.params;
-  const { keys, store } = getInkwire();
-  return toResponse(await handleDelete({ authHeader: req.headers.get("authorization"), id, ifMatchHeader: req.headers.get("if-match"), keys, store }));
+  const { keys, store, config } = getInkwire();
+  return toResponse(await handleDelete({ authHeader: req.headers.get("authorization"), id, ifMatchHeader: req.headers.get("if-match"), keys, store, config }));
 }

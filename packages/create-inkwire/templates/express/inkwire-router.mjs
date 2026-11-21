@@ -4,7 +4,7 @@
 //   app.use(createInkwireRouter());
 // Configuration is environment variables only; see the README. Express 4 or 5.
 import express from "express";
-import { handleDelete, handleDiscovery, handleGet, handleList, handleMedia, handleMediaList, handleMediaUpdate, handleTerms, handlePatch, handleUpsert, } from "inkwire-receiver-core";
+import { handleDelete, handleDiscovery, handleGet, handleList, handleMedia, handleMediaList, handleMediaUpdate, handleTerms, handlePatch, handleRestore, handleRevision, handleRevisions, handleUpsert, } from "inkwire-receiver-core";
 // <inkwire:shared> (identical in the Next.js receiver; `create-inkwire`'s sync script keeps them equal)
 import dns from "node:dns";
 import http from "node:http";
@@ -322,7 +322,10 @@ export function createInkwireRouter(env = process.env) {
     router.get("/api/content", run((req) => handleList({ authHeader: authHeader(req), query: new URL(req.originalUrl, "http://x").searchParams, keys, store, config })));
     router.get("/api/content/:id", run((req) => handleGet({ authHeader: authHeader(req), id: idOf(req), keys, store })));
     router.patch("/api/content/:id", jsonBody, run((req) => handlePatch({ authHeader: authHeader(req), id: idOf(req), rawBody: bodyOf(req), ifMatchHeader: req.header("if-match"), keys, store, config })));
-    router.delete("/api/content/:id", run((req) => handleDelete({ authHeader: authHeader(req), id: idOf(req), ifMatchHeader: req.header("if-match"), keys, store })));
+    router.delete("/api/content/:id", run((req) => handleDelete({ authHeader: authHeader(req), id: idOf(req), ifMatchHeader: req.header("if-match"), keys, store, config })));
+    router.get("/api/content/:id/revisions", run((req) => handleRevisions({ authHeader: authHeader(req), id: idOf(req), keys, store })));
+    router.get("/api/content/:id/revisions/:revision", run((req) => handleRevision({ authHeader: authHeader(req), id: idOf(req), revision: req.params.revision, keys, store })));
+    router.post("/api/content/:id/restore", jsonBody, run((req) => handleRestore({ authHeader: authHeader(req), id: idOf(req), rawBody: bodyOf(req), ifMatchHeader: req.header("if-match"), keys, store, config })));
     router.get("/api/terms", run((req) => handleTerms({ authHeader: authHeader(req), query: new URL(req.originalUrl, "http://x").searchParams, keys, store })));
     router.get("/api/media", run((req) => handleMediaList({ authHeader: authHeader(req), query: new URL(req.originalUrl, "http://x").searchParams, keys, store })));
     router.patch("/api/media/:id", jsonBody, run((req) => handleMediaUpdate({ authHeader: authHeader(req), id: idOf(req), rawBody: bodyOf(req), keys, store })));

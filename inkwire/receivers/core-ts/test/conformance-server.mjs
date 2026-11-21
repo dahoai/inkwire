@@ -16,6 +16,9 @@ import {
   handleMediaUpdate,
   handleTerms,
   handlePatch,
+  handleRestore,
+  handleRevision,
+  handleRevisions,
   handleUpsert,
   parseApiKeys,
 } from "../dist/index.js";
@@ -49,6 +52,7 @@ export function createInkwireServer({ root = mkdtempSync(path.join(tmpdir(), "in
     const common = { authHeader, keys };
     let out;
     const m = /^\/api\/content\/([^/]+)$/.exec(url.pathname);
+    const rv = /^\/api\/content\/([^/]+)\/(?:(restore)|revisions(?:\/([^/]+))?)$/.exec(url.pathname);
     const mm = /^\/api\/media\/([^/]+)$/.exec(url.pathname);
     const id = m ? decodeURIComponent(m[1]) : null;
     const text = rawBody.toString("utf8");
@@ -58,7 +62,11 @@ export function createInkwireServer({ root = mkdtempSync(path.join(tmpdir(), "in
     else if (id && req.method === "GET") out = await handleGet({ ...common, id, store });
     else if (id && req.method === "PATCH")
       out = await handlePatch({ ...common, id, rawBody: text, ifMatchHeader: req.headers["if-match"], store, config });
-    else if (id && req.method === "DELETE") out = await handleDelete({ ...common, id, ifMatchHeader: req.headers["if-match"], store });
+    else if (id && req.method === "DELETE") out = await handleDelete({ ...common, id, ifMatchHeader: req.headers["if-match"], store, config });
+    else if (rv && !rv[2] && req.method === "GET" && rv[3] === undefined) out = await handleRevisions({ ...common, id: decodeURIComponent(rv[1]), store });
+    else if (rv && rv[3] !== undefined && req.method === "GET") out = await handleRevision({ ...common, id: decodeURIComponent(rv[1]), revision: decodeURIComponent(rv[3]), store });
+    else if (rv && rv[2] && req.method === "POST")
+      out = await handleRestore({ ...common, id: decodeURIComponent(rv[1]), rawBody: text, ifMatchHeader: req.headers["if-match"], store, config });
     else if (url.pathname === "/api/terms" && req.method === "GET") out = await handleTerms({ ...common, query: url.searchParams, store });
     else if (url.pathname === "/api/media" && req.method === "GET") out = await handleMediaList({ ...common, query: url.searchParams, store });
     else if (mm && req.method === "PATCH") out = await handleMediaUpdate({ ...common, id: decodeURIComponent(mm[1]), rawBody: text, store });

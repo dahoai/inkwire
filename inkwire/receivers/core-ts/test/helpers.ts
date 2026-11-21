@@ -11,6 +11,9 @@ import {
   handleMediaUpdate,
   handleTerms,
   handlePatch,
+  handleRestore,
+  handleRevision,
+  handleRevisions,
   handleUpsert,
   parseApiKeys,
 } from "../src/index.js";
@@ -53,7 +56,11 @@ export function env(store: ContentStore = new MemoryStore()) {
   const mediaList = (qs = "", auth: string | null = FULL) => handleMediaList({ authHeader: auth ?? undefined, query: new URLSearchParams(qs), keys, store });
   const mediaUpdate = (id: string, body: unknown, auth: string | null = FULL) =>
     handleMediaUpdate({ authHeader: auth ?? undefined, id, rawBody: typeof body === "string" ? body : JSON.stringify(body), keys, store });
-  return { store, upsert, list, get, patch, del, media, terms, mediaList, mediaUpdate };
+  const revisions = (id: string, auth: string | null = FULL) => handleRevisions({ authHeader: auth ?? undefined, id, keys, store });
+  const revision = (id: string, rev: string, auth: string | null = FULL) => handleRevision({ authHeader: auth ?? undefined, id, revision: rev, keys, store });
+  const restore = (id: string, body: unknown, ifMatch?: string, auth: string | null = FULL) =>
+    handleRestore({ authHeader: auth ?? undefined, id, rawBody: JSON.stringify(body), ifMatchHeader: ifMatch, keys, store, config });
+  return { store, upsert, list, get, patch, del, media, terms, mediaList, mediaUpdate, revisions, revision, restore };
 }
 
 export const post = (n: number | string, extra: Record<string, unknown> = {}) => ({

@@ -1,6 +1,6 @@
 {
   "name": "inkwire-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Let Claude, Cursor or any MCP agent read and edit any Inkwire site: posts, pages, SEO and images, with a before-and-after preview of every change.",
   "type": "module",
   "bin": { "inkwire-mcp": "bin.js" },
